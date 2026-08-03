@@ -84,6 +84,8 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("CreateWindowExA failed, GetLastError, {}\n", .{err});
         return error.CreateWindowFailed;
     }
+
+    try runGameLoop();
 }
 
 fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) callconv(.winapi) LRESULT {
@@ -93,5 +95,36 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
             return 0;
         },
         else => return DefWindowProcA(hwnd, msg, wParam, lParam),
+    }
+}
+
+const MSG = win32.ui.windows_and_messaging.MSG;
+const PeekMessageA = win32.user32.PeekMessageA;
+const PM_REMOVE = win32.ui.windows_and_messaging.PM_REMOVE;
+
+const WM_QUIT = win32.ui.windows_and_messaging.WM_QUIT;
+const TranslateMessage = win32.user32.TranslateMessage;
+const DispatchMessageA = win32.user32.DispatchMessageA;
+
+fn runGameLoop() !void {
+    var msg: MSG = undefined;
+
+    var running = true;
+
+    while (running) {
+        while (PeekMessageA(&msg, null, 0, 0, PM_REMOVE) != 0) {
+            if (msg.message == WM_QUIT) {
+                running = false;
+                break;
+            }
+
+            _ = TranslateMessage(&msg);
+            _ = DispatchMessageA(&msg);
+        }
+
+        if (!running) break;
+
+        // update();
+        // render();
     }
 }
