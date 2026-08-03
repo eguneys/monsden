@@ -26,6 +26,17 @@ const WM_DESTROY = win32.ui.windows_and_messaging.WM_DESTROY;
 const PostQuitMessage = win32.user32.PostQuitMessage;
 const DefWindowProcA = win32.user32.DefWindowProcA;
 
+const client_width: i32 = 1280;
+const client_height: i32 = 720;
+
+const SetProcessDpiAwarenessContext = win32.user32.SetProcessDpiAwarenessContext;
+const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = win32.ui.hi_dpi.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
+
+const RECT = win32.foundation.RECT;
+const FALSE = win32.foundation.FALSE;
+
+const AdjustWindowRectEx = win32.user32.AdjustWindowRectEx;
+
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
 
@@ -41,6 +52,12 @@ pub fn main(init: std.process.Init) !void {
     const stdout_writer = &stdout_file_writer.interface;
 
     try stdout_writer.flush();
+
+    // this seems somewhat related to scaling the window
+    _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+    var window_rect = RECT{ .left = 0, .top = 0, .right = client_width, .bottom = client_height };
+    _ = AdjustWindowRectEx(&window_rect, WS_OVERLAPPEDWINDOW, FALSE, .{});
 
     const hInstance = GetModuleHandleA(null);
     const class_name = "MyWindowClass";
@@ -69,8 +86,8 @@ pub fn main(init: std.process.Init) !void {
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        640,
-        480,
+        window_rect.right - window_rect.left,
+        window_rect.bottom - window_rect.top,
         null,
         null,
         @ptrCast(hInstance),
@@ -322,9 +339,9 @@ const MyDirectXContext = struct {
         };
 
         const vertices = [_]Vertex{
-            .{ .pos = .{ 0.0, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-            .{ .pos = .{ 0.0, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } },
-            .{ .pos = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } },
+            .{ .pos = .{ 1.0, 1.0, 0.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+            .{ .pos = .{ 1.0, -1.0, 0.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } },
+            .{ .pos = .{ -1.0, -1.0, 0.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } },
         };
 
         var buffer_desc = D3D11_BUFFER_DESC{
