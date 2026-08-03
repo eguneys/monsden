@@ -127,13 +127,7 @@ fn runGameLoop(cx: MyDirectXContext) !void {
 
         if (!running) break;
 
-        var clear_color = [4]f32{ 0.10, 0.10, 0.35, 1.0 }; // dark blue
-        // ClearRenderTargetView expects an optional pointer to f32 (RGBA),
-        // so pass a pointer to the first element and cast to the expected type.
-        cx.context.ClearRenderTargetView(cx.rtv, @ptrCast(&clear_color[0]));
-
-        _ = cx.swap_chain.Present(1, 0); // 1 = vynsc on
-
+        cx.draw();
         // update();
         // render();
     }
@@ -168,12 +162,33 @@ const HRESULT = win32.zig.HRESULT;
 
 const DXGI_USAGE_RENDER_TARGET_OUTPUT = win32.graphics.dxgi.DXGI_USAGE_RENDER_TARGET_OUTPUT;
 
+const vs_bytecode = @embedFile("shaders/triangle_vs.cso");
+const ps_bytecode = @embedFile("shaders/triangle_ps.cso");
+
+const ID3D11VertexShader = win32.graphics.direct3d11.ID3D11VertexShader;
+const ID3D11PixelShader = win32.graphics.direct3d11.ID3D11PixelShader;
+const D3D11_INPUT_ELEMENT_DESC = win32.graphics.direct3d11.D3D11_INPUT_ELEMENT_DESC;
+const ID3D11InputLayout = win32.graphics.direct3d11.ID3D11InputLayout;
+const D3D11_BUFFER_DESC = win32.graphics.direct3d11.D3D11_BUFFER_DESC;
+const D3D11_SUBRESOURCE_DATA = win32.graphics.direct3d11.D3D11_SUBRESOURCE_DATA;
+const ID3D11Buffer = win32.graphics.direct3d11.ID3D11Buffer;
+const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST = win32.graphics.direct3d.D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+
+const D3D11_USAGE_IMMUTABLE = win32.graphics.direct3d11.D3D11_USAGE_IMMUTABLE;
+const D3D11_BIND_VERTEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_VERTEX_BUFFER;
+
+const DXGI_FORMAT_R32G32B32_FLOAT = win32.graphics.dxgi.common.DXGI_FORMAT_R32G32B32_FLOAT;
+const D3D11_INPUT_PER_VERTEX_DATA = win32.graphics.direct3d11.D3D11_INPUT_PER_VERTEX_DATA;
+
 const MyDirectXContext = struct {
     back_buffer: *ID3D11Texture2D,
     rtv: *ID3D11RenderTargetView,
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     swap_chain: *IDXGISwapChain,
+
+    input_layout: *ID3D11InputLayout,
+    vertex_buffer: ID3D11Buffer,
 
     const Self = @This();
     fn deinit(self: *Self) void {
@@ -183,6 +198,8 @@ const MyDirectXContext = struct {
         _ = self.context.IUnknown.Release();
         _ = self.device.IUnknown.Release();
         _ = self.swap_chain.IUnknown.Release();
+        _ = self.input_layout.IUnknown.Release();
+        _ = self.vertex_buffer.IUnknown.Release();
     }
 
     fn init(hwnd: HWND) !MyDirectXContext {
@@ -253,12 +270,111 @@ const MyDirectXContext = struct {
         };
         context.RSSetViewports(1, @ptrCast(&viewport));
 
+        // Shader additions
+
+        var vertex_shader: *ID3D11VertexShader = undefined;
+        hr = device.CreateVertexShader(vs_bytecode, vs_bytecode.len, null, @ptrCast(&vertex_shader));
+        if (hr != HRESULT.S_OK) return error.CreateVertexShaderFailed;
+        defer _ = vertex_shader.IUnknown.Release();
+
+        var pixel_shader: *ID3D11PixelShader = undefined;
+        hr = device.CreatePixelShader(ps_bytecode, ps_bytecode.len, null, @ptrCast(&pixel_shader));
+        if (hr != HRESULT.S_OK) return error.CreatePixelShaderFailed;
+        defer _ = pixel_shader.IUnknown.Release();
+
+        const input_element_descs = [_]D3D11_INPUT_ELEMENT_DESC{
+            .{
+                .SemanticName = "POSITION",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 0,
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+            .{
+                .SemanticName = "COLOR",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 12, // 3 floats of POSITION
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+        };
+
+        var input_layout: *ID3D11InputLayout = undefined;
+        hr = device.CreateInputLayout(
+            &input_element_descs,
+            input_element_descs.len,
+            vs_bytecode,
+            vs_bytecode.len,
+            @ptrCast(&input_layout),
+        );
+        if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
+        errdefer _ = input_layout.IUnknown.Release();
+
+        // --- Vertex buffer: one small hardcoded triangle, in NDC space already
+        // (no view/projection matrix yet)
+        const Vertex = extern struct {
+            pos: [3]f32,
+            color: [4]f32,
+        };
+
+        const vertices = [_]Vertex{
+            .{ .pos = .{ 0.0, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+            .{ .pos = .{ 0.0, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } },
+            .{ .pos = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } },
+        };
+
+        var buffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(@TypeOf(vertices)),
+            .Usage = D3D11_USAGE_IMMUTABLE,
+            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var init_data = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = &vertices,
+            .SysMemPitch = 0,
+            .SysMemSlicePitch = 0,
+        };
+
+        var vertex_buffer: ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&buffer_desc, &init_data, @ptrCast(&vertex_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
+        errdefer _ = vertex_buffer.IUnknown.Release();
+
+        // Everything above is set once; only Clear/Draw/Present repeat per frame.
+
+        context.IASetInputLayout(input_layout);
+        context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        const stride: u32 = @sizeOf(Vertex);
+        const offset: u32 = 0;
+        context.IASetVertexBuffers(0, 1, @ptrCast(&vertex_buffer), &.{stride}, &.{offset});
+        context.VSSetShader(vertex_shader, null, 0);
+        context.PSSetShader(pixel_shader, null, 0);
+
         return .{
+            .vertex_buffer = vertex_buffer,
+            .input_layout = input_layout,
             .back_buffer = back_buffer,
             .rtv = rtv,
             .context = context,
             .device = device,
             .swap_chain = swap_chain,
         };
+    }
+
+    fn draw(self: Self) void {
+        var clear_color = [4]f32{ 0.10, 0.10, 0.35, 1.0 }; // dark blue
+        // ClearRenderTargetView expects an optional pointer to f32 (RGBA),
+        // so pass a pointer to the first element and cast to the expected type.
+        self.context.ClearRenderTargetView(self.rtv, @ptrCast(&clear_color[0]));
+        self.context.Draw(3, 0);
+
+        _ = self.swap_chain.Present(1, 0); // 1 = vynsc on
     }
 };

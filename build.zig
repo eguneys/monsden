@@ -34,7 +34,28 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const shader_dir = "src/shaders";
+
+    const compile_vs = b.addSystemCommand(&.{
+        "bin/fxc.exe",                  "/nologo",
+        "/T",                           "vs_5_0",
+        "/E",                           "VSMain",
+        "/Fo",                          shader_dir ++ "/triangle_vs.cso",
+        shader_dir ++ "/triangle.hlsl",
+    });
+
+    const compile_ps = b.addSystemCommand(&.{
+        "bin/fxc.exe",                  "/nologo",
+        "/T",                           "ps_5_0",
+        "/E",                           "PSMain",
+        "/Fo",                          shader_dir ++ "/triangle_ps.cso",
+        shader_dir ++ "/triangle.hlsl",
+    });
+
     //exe.subsystem = .Windows;
+
+    exe.step.dependOn(&compile_vs.step);
+    exe.step.dependOn(&compile_ps.step);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
