@@ -115,12 +115,13 @@ pub fn main(init: std.process.Init) !void {
 
         _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(&context)));
 
-        try runGameLoop(context);
+        try runGameLoop(&context);
     } else {
         const err = GetLastError();
         std.debug.print("CreateWindowExA failed, GetLastError, {}\n", .{err});
         return error.CreateWindowFailed;
     }
+    std.debug.print("Bye.", .{});
 }
 
 const IDXGIDebug = win32.graphics.dxgi.IDXGIDebug;
@@ -179,12 +180,13 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
                 return 0;
             }
 
-            var back_buffer: ID3D11Texture2D = undefined;
-            if (!state.swap_chain.GetBuffer(0, IID_ID3D11Texture2D, @ptrCast(&back_buffer)).failed) {
+            var back_buffer: *ID3D11Texture2D = undefined;
+            if (state.swap_chain.GetBuffer(0, IID_ID3D11Texture2D, @ptrCast(&back_buffer)) == HRESULT.S_OK) {
                 defer _ = back_buffer.IUnknown.Release();
                 var new_rtv: *ID3D11RenderTargetView = undefined;
-                if (!state.device.CreateRenderTargetView(@ptrCast(&back_buffer), null, @ptrCast(&new_rtv)).failed) {
+                if (!state.device.CreateRenderTargetView(@ptrCast(back_buffer), null, @ptrCast(&new_rtv)).failed) {
                     state.backbuffer_rtv = new_rtv;
+                    std.debug.print("RenderTargetSetTo{*}\n", .{new_rtv});
                 } else {
                     std.debug.print("CreateRenderTargetView", .{});
                 }
@@ -205,7 +207,7 @@ const WM_QUIT = win32.ui.windows_and_messaging.WM_QUIT;
 const TranslateMessage = win32.user32.TranslateMessage;
 const DispatchMessageA = win32.user32.DispatchMessageA;
 
-fn runGameLoop(cx: MyDirectXContext) !void {
+fn runGameLoop(cx: *MyDirectXContext) !void {
     var msg: MSG = undefined;
 
     var running = true;
@@ -304,10 +306,8 @@ const D3D11_FILL_SOLID = win32.graphics.direct3d11.D3D11_FILL_SOLID;
 const D3D11_CULL_NONE = win32.graphics.direct3d11.D3D11_CULL_NONE;
 
 const MyDirectXContext = struct {
-    back_buffer: *ID3D11Texture2D,
     backbuffer_rtv: ?*ID3D11RenderTargetView,
 
-    game_tex: *ID3D11Texture2D,
     game_rtv: *ID3D11RenderTargetView,
 
     device: *ID3D11Device,
@@ -341,17 +341,12 @@ const MyDirectXContext = struct {
 
     const Self = @This();
     fn deinit(self: *Self) void {
-        _ = self.sampler.IUnknown.Release();
-        _ = self.back_buffer.IUnknown.Release();
-        if (self.backbuffer_rtv) |backbuffer_rtv|
-            _ = backbuffer_rtv.IUnknown.Release();
+        self.context.ClearState();
 
-        _ = self.game_tex.IUnknown.Release();
+        _ = self.sampler.IUnknown.Release();
         _ = self.game_rtv.IUnknown.Release();
 
-        _ = self.device.IUnknown.Release();
-        _ = self.context.IUnknown.Release();
-        _ = self.swap_chain.IUnknown.Release();
+        _ = self.game_srv.IUnknown.Release();
 
         _ = self.input_layout.IUnknown.Release();
         _ = self.vertex_buffer.IUnknown.Release();
@@ -361,6 +356,15 @@ const MyDirectXContext = struct {
 
         _ = self.blit_vertex_shader.IUnknown.Release();
         _ = self.blit_pixel_shader.IUnknown.Release();
+
+        _ = self.rasterizer_state.IUnknown.Release();
+
+        if (self.backbuffer_rtv) |backbuffer_rtv|
+            _ = backbuffer_rtv.IUnknown.Release();
+
+        _ = self.device.IUnknown.Release();
+        _ = self.context.IUnknown.Release();
+        _ = self.swap_chain.IUnknown.Release();
     }
 
     fn init(hwnd: HWND) !MyDirectXContext {
@@ -416,7 +420,7 @@ const MyDirectXContext = struct {
         {
             hr = swap_chain.GetBuffer(0, IID_ID3D11Texture2D, @ptrCast(&back_buffer));
             if (hr != HRESULT.S_OK) return error.GetBackBufferFailed;
-            errdefer _ = back_buffer.IUnknown.Release();
+            defer _ = back_buffer.IUnknown.Release();
 
             hr = device.CreateRenderTargetView(@ptrCast(back_buffer), null, @ptrCast(&backbuffer_rtv));
             if (hr != HRESULT.S_OK) return error.CreateRTVFailed;
@@ -426,8 +430,8 @@ const MyDirectXContext = struct {
         // --- Offscreen "game" render target: fixed at game_width x
         // game_height  for the lifetime of the program.
         var game_tex_desc = D3D11_TEXTURE2D_DESC{
-            .Width = client_width,
-            .Height = client_height,
+            .Width = game_width,
+            .Height = game_height,
             .MipLevels = 1,
             .ArraySize = 1,
             .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -441,7 +445,7 @@ const MyDirectXContext = struct {
         var game_tex: *ID3D11Texture2D = undefined;
         hr = device.CreateTexture2D(&game_tex_desc, null, @ptrCast(&game_tex));
         if (hr != HRESULT.S_OK) return error.CreateGameTextureFailed;
-        errdefer _ = game_tex.IUnknown.Release();
+        defer _ = game_tex.IUnknown.Release();
 
         var game_rtv: *ID3D11RenderTargetView = undefined;
         hr = device.CreateRenderTargetView(@ptrCast(game_tex), null, @ptrCast(&game_rtv));
@@ -616,9 +620,7 @@ const MyDirectXContext = struct {
             .vertex_buffer = vertex_buffer,
             .input_layout = input_layout,
 
-            .back_buffer = back_buffer,
             .backbuffer_rtv = backbuffer_rtv,
-            .game_tex = game_tex,
             .game_rtv = game_rtv,
 
             .context = context,
@@ -627,7 +629,7 @@ const MyDirectXContext = struct {
         };
     }
 
-    fn draw(self: Self) void {
+    fn draw(self: *Self) void {
         var client_rect: RECT = undefined;
         _ = GetClientRect(self.hwnd, &client_rect);
         const win_w = client_rect.right - client_rect.left;
@@ -644,6 +646,11 @@ const MyDirectXContext = struct {
 
         self.context.IASetInputLayout(self.input_layout);
         self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        const strides = &[_]u32{self.stride};
+        const vb_offsets = &[_]u32{self.vb_offset};
+        self.context.IASetVertexBuffers(0, 1, @ptrCast(&self.vertex_buffer), strides, vb_offsets);
+
         self.context.VSSetShader(self.vertex_shader, null, 0);
         self.context.PSSetShader(self.pixel_shader, null, 0);
         self.context.Draw(3, 0);
