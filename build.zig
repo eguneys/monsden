@@ -1,36 +1,14 @@
 const std = @import("std");
 
-// Although this function looks imperative, it does not perform the build
-// directly and instead it mutates the build graph (`b`) that will be then
-// executed by an external runner. The functions in `std.Build` implement a DSL
-// for defining build steps and express dependencies between them, allowing the
-// build runner to parallelize the build automatically (and the cache system to
-// know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    // Standard target options allow the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
     const exe = b.addExecutable(.{
         .name = "monsden",
         .root_module = b.createModule(.{
-            // b.createModule defines a new module just like b.addModule but,
-            // unlike b.addModule, it does not expose the module to consumers of
-            // this package, which is why in this case we don't have to give it a name.
             .root_source_file = b.path("src/main.zig"),
-            // Target and optimization levels must be explicitly wired in when
-            // defining an executable or library (in the root module), and you
-            // can also hardcode a specific target for an executable or library
-            // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
-            // List of modules available for import in source files part of the
-            // root module.
         }),
     });
 
@@ -52,10 +30,28 @@ pub fn build(b: *std.Build) void {
         shader_dir ++ "/triangle.hlsl",
     });
 
+    const compile_blit_vs = b.addSystemCommand(&.{
+        "bin/fxc.exe",              "/nologo",
+        "/T",                       "vs_5_0",
+        "/E",                       "VSMain",
+        "/Fo",                      shader_dir ++ "/blit_vs.cso",
+        shader_dir ++ "/blit.hlsl",
+    });
+
+    const compile_blit_ps = b.addSystemCommand(&.{
+        "bin/fxc.exe",              "/nologo",
+        "/T",                       "ps_5_0",
+        "/E",                       "PSMain",
+        "/Fo",                      shader_dir ++ "/blit_ps.cso",
+        shader_dir ++ "/blit.hlsl",
+    });
+
     //exe.subsystem = .Windows;
 
     exe.step.dependOn(&compile_vs.step);
     exe.step.dependOn(&compile_ps.step);
+    exe.step.dependOn(&compile_blit_vs.step);
+    exe.step.dependOn(&compile_blit_ps.step);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
