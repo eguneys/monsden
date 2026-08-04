@@ -149,6 +149,15 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Bye.", .{});
 }
 
+const WM_ENTERSIZEMOVE = win32.ui.windows_and_messaging.WM_ENTERSIZEMOVE;
+const WM_EXITSIZEMOVE = win32.ui.windows_and_messaging.WM_EXITSIZEMOVE;
+const WM_TIMER = win32.ui.windows_and_messaging.WM_TIMER;
+const SetTimer = win32.user32.SetTimer;
+const KillTimer = win32.user32.KillTimer;
+const USER_TIMER_MINIMUM = win32.ui.windows_and_messaging.USER_TIMER_MINIMUM;
+
+const RESIZE_TIMER_ID = 1;
+
 const IDXGIDebug = win32.graphics.dxgi.IDXGIDebug;
 const DXGIGetDebugInterface1 = win32.dxgi.DXGIGetDebugInterface1;
 const IID_IDXGIDebug = win32.graphics.dxgi.IID_IDXGIDebug;
@@ -159,6 +168,23 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
     switch (msg) {
         WM_DESTROY => {
             PostQuitMessage(0);
+            return 0;
+        },
+        WM_ENTERSIZEMOVE => {
+            _ = SetTimer(hwnd, RESIZE_TIMER_ID, USER_TIMER_MINIMUM, null);
+            return 0;
+        },
+        WM_EXITSIZEMOVE => {
+            _ = KillTimer(hwnd, RESIZE_TIMER_ID);
+            return 0;
+        },
+        WM_TIMER => {
+            if (wParam == RESIZE_TIMER_ID) {
+                const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if (user_data == 0) return 0;
+                const state: *MyDirectXContext = @ptrFromInt(@as(usize, @bitCast(user_data)));
+                state.draw(); // resize buffers already happened in WM_SIZE
+            }
             return 0;
         },
         WM_SYSKEYDOWN => {
