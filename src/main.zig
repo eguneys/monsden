@@ -47,6 +47,31 @@ const GWLP_USERDATA = win32.ui.windows_and_messaging.GWLP_USERDATA;
 
 const WM_SIZE = win32.ui.windows_and_messaging.WM_SIZE;
 
+const WM_SYSKEYDOWN = win32.ui.windows_and_messaging.WM_SYSKEYDOWN;
+
+const GWL_STYLE = win32.ui.windows_and_messaging.GWL_STYLE;
+
+const VK_RETURN = win32.ui.input.keyboard_and_mouse.VK_RETURN;
+
+const GetWindowRect = win32.user32.GetWindowRect;
+const SetWindowPos = win32.user32.SetWindowPos;
+
+const MonitorFromWindow = win32.user32.MonitorFromWindow;
+
+const SWP_NOZORDER = win32.ui.windows_and_messaging.SWP_NOZORDER;
+const SWP_FRAMECHANGED = win32.ui.windows_and_messaging.SWP_FRAMECHANGED;
+
+const MONITOR_DEFAULTTONEAREST = win32.graphics.gdi.MONITOR_DEFAULTTONEAREST;
+const MONITORINFO = win32.graphics.gdi.MONITORINFO;
+
+const GetMonitorInfoW = win32.user32.GetMonitorInfoW;
+
+const WINDOW_STYLE = win32.ui.windows_and_messaging.WINDOW_STYLE;
+const WS_POPUP = win32.ui.windows_and_messaging.WS_POPUP;
+const WS_VISIBLE = win32.ui.windows_and_messaging.WS_VISIBLE;
+
+const HWND_TOP = win32.ui.windows_and_messaging.HWND_TOPMOST;
+
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
 
@@ -135,6 +160,17 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
         WM_DESTROY => {
             PostQuitMessage(0);
             return 0;
+        },
+        WM_SYSKEYDOWN => {
+            if (wParam == @intFromEnum(VK_RETURN) and (lParam & (1 << 29)) != 0) { // bit 29 = ALT
+                const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if (user_data == 0) return 0;
+                const state: *MyDirectXContext = @ptrFromInt(@as(usize, @bitCast(user_data)));
+                state.toggleFullscreen();
+                return 0;
+            }
+
+            return DefWindowProcA(hwnd, msg, wParam, lParam);
         },
         WM_SIZE => {
             const SIZE_MINIMIZED: usize = 1;
@@ -305,6 +341,11 @@ const ID3D11RasterizerState = win32.graphics.direct3d11.ID3D11RasterizerState;
 const D3D11_FILL_SOLID = win32.graphics.direct3d11.D3D11_FILL_SOLID;
 const D3D11_CULL_NONE = win32.graphics.direct3d11.D3D11_CULL_NONE;
 
+const IDXGIFactory = win32.graphics.dxgi.IDXGIFactory;
+const IID_IDXGIFactory = win32.graphics.dxgi.IID_IDXGIFactory;
+
+const DXGI_MWA_NO_ALT_ENTER = win32.graphics.dxgi.DXGI_MWA_NO_ALT_ENTER;
+
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
 
@@ -338,6 +379,10 @@ const MyDirectXContext = struct {
     hwnd: HWND,
 
     game_viewport: D3D11_VIEWPORT,
+
+    is_fullscreen: bool = false,
+    windowed_style: u32 = 0, // WS_OVERLAPPEDWINDOW etc,
+    windowed_rect: RECT = undefined,
 
     const Self = @This();
     fn deinit(self: *Self) void {
@@ -410,6 +455,13 @@ const MyDirectXContext = struct {
             &feature_level,
             @ptrCast(&context),
         );
+
+        var factory: *IDXGIFactory = undefined;
+        hr = swap_chain.IDXGIObject.GetParent(IID_IDXGIFactory, @ptrCast(&factory));
+        if (hr == HRESULT.S_OK) {
+            _ = factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+            _ = factory.IUnknown.Release();
+        }
 
         if (hr != HRESULT.S_OK) return error.D3D11DeviceCreationFailed;
 
@@ -731,5 +783,57 @@ const MyDirectXContext = struct {
         self.context.PSSetShaderResources(0, 1, null_srvs);
 
         _ = self.swap_chain.Present(1, 0); // 1 = vynsc on
+    }
+
+    fn toggleFullscreen(self: *Self) void {
+        if (self.is_fullscreen) self.leaveFullscreen() else self.enterFullscreen();
+    }
+
+    fn enterFullscreen(self: *Self) void {
+        if (self.is_fullscreen) return;
+        self.windowed_style = @intCast(GetWindowLongPtrW(self.hwnd, GWL_STYLE));
+        _ = GetWindowRect(self.hwnd, &self.windowed_rect);
+        std.debug.print("ENTER RECT {}", .{self.windowed_rect});
+
+        const mon = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+        var mi: MONITORINFO = undefined;
+        mi.cbSize = @sizeOf(MONITORINFO);
+        _ = GetMonitorInfoW(mon, &mi);
+        const flags = @as(u32, @bitCast(WINDOW_STYLE{ .POPUP = 1, .VISIBLE = 1 }));
+        _ = SetWindowLongPtrW(self.hwnd, GWL_STYLE, @as(isize, @intCast(flags)));
+
+        const w = mi.rcMonitor.right - mi.rcMonitor.left;
+        const h = mi.rcMonitor.bottom - mi.rcMonitor.top;
+        _ = SetWindowPos(
+            self.hwnd,
+            HWND_TOP,
+            mi.rcMonitor.left,
+            mi.rcMonitor.top,
+            w,
+            h,
+            //SWP_NOZORDER | SWP_FRAMECHANGED,
+            .{ .NOZORDER = 1, .DRAWFRAME = 1 },
+        );
+
+        self.is_fullscreen = true;
+    }
+
+    fn leaveFullscreen(self: *Self) void {
+        if (!self.is_fullscreen) return;
+
+        _ = SetWindowLongPtrW(self.hwnd, GWL_STYLE, self.windowed_style);
+        const r = self.windowed_rect;
+        std.debug.print("RECT {}", .{self.windowed_rect});
+        _ = SetWindowPos(
+            self.hwnd,
+            null,
+            r.left,
+            r.top,
+            r.right - r.left,
+            r.bottom - r.top,
+            .{ .NOZORDER = 1, .DRAWFRAME = 1 },
+        );
+
+        self.is_fullscreen = false;
     }
 };
