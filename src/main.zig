@@ -663,15 +663,27 @@ const MyDirectXContext = struct {
         self.context.OMSetRenderTargets(1, backbuffer_rtvs, null);
         self.context.ClearRenderTargetView(self.backbuffer_rtv, @ptrCast(&self.letterbox_color[0]));
 
-        const scale_x = @divTrunc(win_w, @as(i32, @intCast(game_width)));
-        const scale_y = @divTrunc(win_h, @as(i32, @intCast(game_height)));
-        const scale = @max(1, @min(scale_x, scale_y));
+        const win_w_f: f32 = @floatFromInt(win_w);
+        const win_h_f: f32 = @floatFromInt(win_h);
+        const game_w_f: f32 = @floatFromInt(game_width);
+        const game_h_f: f32 = @floatFromInt(game_height);
 
-        const out_w = @as(i32, @intCast(game_width)) * scale;
-        const out_h = @as(i32, @intCast(game_height)) * scale;
+        //const scale_x = @divTrunc(win_w, @as(i32, @intCast(game_width)));
+        //const scale_y = @divTrunc(win_h, @as(i32, @intCast(game_height)));
+        //const scale = @max(1, @min(scale_x, scale_y));
 
-        const offset_x = @divTrunc(win_w - out_w, 2);
-        const offset_y = @divTrunc(win_h - out_h, 2);
+        const scale = @min(win_w_f / game_w_f, win_h_f / game_h_f);
+
+        //const out_w = @as(i32, @intCast(game_width)) * scale;
+        //const out_h = @as(i32, @intCast(game_height)) * scale;
+        const out_w = game_w_f * scale;
+        const out_h = game_h_f * scale;
+
+        //const offset_x = @divTrunc(win_w - out_w, 2);
+        //const offset_y = @divTrunc(win_h - out_h, 2);
+
+        const offset_x = (win_w_f - out_w) / 2.0;
+        const offset_y = (win_h_f - out_h) / 2.0;
 
         const Last = struct {
             var w: i32 = -1;
@@ -687,10 +699,10 @@ const MyDirectXContext = struct {
         }
 
         var blit_viewport = D3D11_VIEWPORT{
-            .TopLeftX = @floatFromInt(offset_x),
-            .TopLeftY = @floatFromInt(offset_y),
-            .Width = @floatFromInt(out_w),
-            .Height = @floatFromInt(out_h),
+            .TopLeftX = offset_x,
+            .TopLeftY = offset_y,
+            .Width = out_w,
+            .Height = out_h,
             .MinDepth = 0,
             .MaxDepth = 1.0,
         };
