@@ -4,6 +4,9 @@ const Io = std.Io;
 const png = @import("png.zig");
 const MyAssetsPathLocator = @import("assets.zig").MyAssetsPathLocator;
 
+const math = @import("math.zig");
+const Rect = math.Rect;
+
 const win32 = @import("win32/zigwin32/win32.zig");
 
 const GetModuleHandleA = win32.kernel32.GetModuleHandleA;
@@ -372,6 +375,8 @@ const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST = win32.graphics.direct3d.D3D11_PRIM
 const D3D11_USAGE_IMMUTABLE = win32.graphics.direct3d11.D3D11_USAGE_IMMUTABLE;
 const D3D11_BIND_VERTEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_VERTEX_BUFFER;
 
+const D3D11_USAGE_DYNAMIC = win32.graphics.direct3d11.D3D11_USAGE_DYNAMIC;
+
 const DXGI_FORMAT_R32G32B32_FLOAT = win32.graphics.dxgi.common.DXGI_FORMAT_R32G32B32_FLOAT;
 const D3D11_INPUT_PER_VERTEX_DATA = win32.graphics.direct3d11.D3D11_INPUT_PER_VERTEX_DATA;
 
@@ -407,6 +412,9 @@ const DXGI_FORMAT_R32G32_FLOAT = win32.graphics.dxgi.common.DXGI_FORMAT_R32G32_F
 const DXGI_FORMAT_R16_UINT = win32.graphics.dxgi.common.DXGI_FORMAT_R16_UINT;
 
 const D3D11_BIND_INDEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_INDEX_BUFFER;
+
+const D3D11_MAPPED_SUBRESOURCE = win32.graphics.direct3d11.D3D11_MAPPED_SUBRESOURCE;
+const D3D11_MAP_WRITE_DISCARD = win32.graphics.direct3d11.D3D11_MAP_WRITE_DISCARD;
 
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
@@ -445,6 +453,8 @@ const MyDirectXContext = struct {
     hwnd: HWND,
 
     game_viewport: D3D11_VIEWPORT,
+
+    atlas_tex_desc: D3D11_TEXTURE2D_DESC,
 
     is_fullscreen: bool = false,
     windowed_style: u32 = 0, // WS_OVERLAPPEDWINDOW etc,
@@ -696,13 +706,6 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
         errdefer _ = input_layout.IUnknown.Release();
 
-        // --- Vertex buffer: one small hardcoded triangle, in NDC space already
-        // (no view/projection matrix yet)
-        const Vertex = extern struct {
-            pos: [3]f32,
-            uv: [2]f32,
-        };
-
         const vertices = [_]Vertex{
             .{ .pos = .{ -1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } }, // top-left
             .{ .pos = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } }, //top-right
@@ -714,9 +717,10 @@ const MyDirectXContext = struct {
 
         var buffer_desc = D3D11_BUFFER_DESC{
             .ByteWidth = @sizeOf(@TypeOf(vertices)),
-            .Usage = D3D11_USAGE_IMMUTABLE,
+            //.Usage = D3D11_USAGE_IMMUTABLE,
+            .Usage = D3D11_USAGE_DYNAMIC,
             .BindFlags = D3D11_BIND_VERTEX_BUFFER,
-            .CPUAccessFlags = .{},
+            .CPUAccessFlags = .{ .WRITE = 1 },
             .MiscFlags = .{},
             .StructureByteStride = 0,
         };
@@ -769,6 +773,8 @@ const MyDirectXContext = struct {
         const null_srv: ?*ID3D11ShaderResourceView = null;
 
         return .{
+            .atlas_tex_desc = atlas_tex_desc,
+
             .game_viewport = game_viewport,
             .stride = stride,
             .vb_offset = vb_offset,
@@ -838,7 +844,15 @@ const MyDirectXContext = struct {
         const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
         self.context.PSSetSamplers(0, 1, samplers2);
 
-        self.context.DrawIndexed(6, 0, 0);
+        //self.context.DrawIndexed(6, 0, 0);
+
+        var src_rect = Rect{ .x = 0, .y = 0, .width = 160, .height = 160 };
+        var dst_rect = Rect{ .x = 10, .y = 10, .width = 620, .height = 340 };
+        self.drawSprite(src_rect, dst_rect);
+
+        src_rect = Rect{ .x = 0, .y = 0, .width = 100, .height = 100 };
+        dst_rect = Rect{ .x = 100, .y = 100, .width = 100, .height = 300 };
+        self.drawSprite(src_rect, dst_rect);
 
         // -- Pass 2: blit game target onto the backbuffer, integer-scaled
         // centered, with black bars for whatever doesn't divide evenly ---
@@ -969,4 +983,42 @@ const MyDirectXContext = struct {
 
         self.is_fullscreen = false;
     }
+
+    fn drawSprite(self: *Self, source_rect: Rect, dest_rect: Rect) void {
+        const atlas_tex_desc = self.atlas_tex_desc;
+
+        // compute u0, v0, u1, v1, and ndc_x0..ndc_y1 as above
+
+        // source rect
+        const _u0 = source_rect.x / @as(f32, @floatFromInt(atlas_tex_desc.Width));
+        const v0 = source_rect.y / @as(f32, @floatFromInt(atlas_tex_desc.Height));
+        const _u1 = (source_rect.x + source_rect.width) / @as(f32, @floatFromInt(atlas_tex_desc.Width));
+        const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(atlas_tex_desc.Height));
+
+        //dest rect
+        const ndc_x0 = (dest_rect.x / game_width) * 2.0 - 1.0;
+        const ndc_y0 = 1.0 - (dest_rect.y / game_height) * 2.0; // y flips
+        const ndc_x1 = ((dest_rect.x + dest_rect.width) / game_width) * 2.0 - 1.0;
+        const ndc_y1 = 1.0 - ((dest_rect.y + dest_rect.height) / game_height) * 2.0;
+
+        const quad_vertices = [_]Vertex{
+            .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
+            .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
+            .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 } }, //bottom-right
+            .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
+        };
+
+        // Map -> write 4 vert -> Unmap
+        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
+        _ = self.context.Map(@ptrCast(self.vertex_buffer), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        const dst: [*]Vertex = @ptrCast(@alignCast(mapped.pData));
+        @memcpy(dst[0..4], &quad_vertices);
+        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+        self.context.DrawIndexed(6, 0, 0);
+    }
+};
+
+const Vertex = extern struct {
+    pos: [3]f32,
+    uv: [2]f32,
 };
