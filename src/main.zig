@@ -168,12 +168,13 @@ pub fn main(init: std.process.Init) !void {
     if (hwnd) |hwndV| {
         _ = ShowWindow(hwndV, SW_SHOW);
 
-        var context: MyDirectXContext = try .init(hwndV, atlas_width, atlas_height, &pixel_buffer);
-        defer context.deinit();
+        const context: MyDirectXContext = try .init(hwndV, atlas_width, atlas_height, &pixel_buffer);
+        var platform: MyPlatform = .init(context);
+        defer platform.deinit();
 
-        _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(&context)));
+        _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(&platform)));
 
-        try runGameLoop(&context);
+        try platform.runGameLoop();
     } else {
         const err = GetLastError();
         std.debug.print("CreateWindowExA failed, GetLastError, {}\n", .{err});
@@ -215,8 +216,8 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
             if (wParam == RESIZE_TIMER_ID) {
                 const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if (user_data == 0) return 0;
-                const state: *MyDirectXContext = @ptrFromInt(@as(usize, @bitCast(user_data)));
-                state.draw(); // resize buffers already happened in WM_SIZE
+                const state: *MyPlatform = @ptrFromInt(@as(usize, @bitCast(user_data)));
+                state.draw();
             }
             return 0;
         },
@@ -224,8 +225,8 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
             if (wParam == @intFromEnum(VK_RETURN) and (lParam & (1 << 29)) != 0) { // bit 29 = ALT
                 const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if (user_data == 0) return 0;
-                const state: *MyDirectXContext = @ptrFromInt(@as(usize, @bitCast(user_data)));
-                state.toggleFullscreen();
+                const state: *MyPlatform = @ptrFromInt(@as(usize, @bitCast(user_data)));
+                state.cx.toggleFullscreen();
                 return 0;
             }
 
@@ -245,49 +246,8 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
             // SetWindowLongPtrW runs in main() -- nothing to resize yet.
             const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
             if (user_data == 0) return 0;
-            const state: *MyDirectXContext = @ptrFromInt(@as(usize, @bitCast(user_data)));
-
-            state.context.OMSetRenderTargets(0, null, null);
-
-            //state.context.ClearState();
-            //state.context.Flush();
-
-            //Drop our reference to the old backbuffer RTV before
-            // resizing -- ResizeBuffers fails if anything still
-            // references the swap chain's buffers.
-            if (state.backbuffer_rtv) |old_rtv| {
-                _ = old_rtv.IUnknown.Release();
-                state.backbuffer_rtv = null;
-            }
-
-            const hr = state.swap_chain.ResizeBuffers(0, new_width, new_height, DXGI_FORMAT_UNKNOWN, 0);
-            if (hr != HRESULT.S_OK) {
-                std.debug.print("ResizeBuffers failed: hr={}\n", .{hr});
-
-                var debug_iface: ?*IDXGIDebug = null;
-                if (!DXGIGetDebugInterface1(0, IID_IDXGIDebug, @ptrCast(&debug_iface)).failed) {
-                    if (debug_iface) |dbg| {
-                        _ = dbg.ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_DETAIL);
-                        _ = dbg.IUnknown.Release();
-                    }
-                }
-
-                return 0;
-            }
-
-            var back_buffer: *ID3D11Texture2D = undefined;
-            if (state.swap_chain.GetBuffer(0, IID_ID3D11Texture2D, @ptrCast(&back_buffer)) == HRESULT.S_OK) {
-                defer _ = back_buffer.IUnknown.Release();
-                var new_rtv: *ID3D11RenderTargetView = undefined;
-                if (!state.device.CreateRenderTargetView(@ptrCast(back_buffer), null, @ptrCast(&new_rtv)).failed) {
-                    state.backbuffer_rtv = new_rtv;
-                    std.debug.print("RenderTargetSetTo{*}\n", .{new_rtv});
-                } else {
-                    std.debug.print("CreateRenderTargetView", .{});
-                }
-            } else {
-                std.debug.print("GetBuffer failed after resize", .{});
-            }
+            const state: *MyPlatform = @ptrFromInt(@as(usize, @bitCast(user_data)));
+            state.cx.onResize(new_width, new_height);
             return 0;
         },
         else => return DefWindowProcA(hwnd, msg, wParam, lParam),
@@ -301,30 +261,6 @@ const PM_REMOVE = win32.ui.windows_and_messaging.PM_REMOVE;
 const WM_QUIT = win32.ui.windows_and_messaging.WM_QUIT;
 const TranslateMessage = win32.user32.TranslateMessage;
 const DispatchMessageA = win32.user32.DispatchMessageA;
-
-fn runGameLoop(cx: *MyDirectXContext) !void {
-    var msg: MSG = undefined;
-
-    var running = true;
-
-    while (running) {
-        while (PeekMessageA(&msg, null, 0, 0, PM_REMOVE) != 0) {
-            if (msg.message == WM_QUIT) {
-                running = false;
-                break;
-            }
-
-            _ = TranslateMessage(&msg);
-            _ = DispatchMessageA(&msg);
-        }
-
-        if (!running) break;
-
-        cx.draw();
-        // update();
-        // render();
-    }
-}
 
 const DXGI_SWAP_CHAIN_DESC = win32.graphics.dxgi.DXGI_SWAP_CHAIN_DESC;
 const IDXGISwapChain = win32.graphics.dxgi.IDXGISwapChain;
@@ -415,6 +351,9 @@ const D3D11_BIND_INDEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_INDEX_BUFFE
 
 const D3D11_MAPPED_SUBRESOURCE = win32.graphics.direct3d11.D3D11_MAPPED_SUBRESOURCE;
 const D3D11_MAP_WRITE_DISCARD = win32.graphics.direct3d11.D3D11_MAP_WRITE_DISCARD;
+const D3D11_MAP_WRITE_NO_OVERWRITE = win32.graphics.direct3d11.D3D11_MAP_WRITE_NO_OVERWRITE;
+
+const MAX_SPRITES_PER_BATCH = 50;
 
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
@@ -706,17 +645,23 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
         errdefer _ = input_layout.IUnknown.Release();
 
-        const vertices = [_]Vertex{
-            .{ .pos = .{ -1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } }, // top-left
-            .{ .pos = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } }, //top-right
-            .{ .pos = .{ 1.0, -1.0, 0.0 }, .uv = .{ 1.0, 1.0 } }, //bottom-right
-            .{ .pos = .{ -1.0, -1.0, 0.0 }, .uv = .{ 0.0, 1.0 } }, //bottom-left
-        };
+        //const vertices = [_]Vertex{
+        //    .{ .pos = .{ -1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } }, // top-left
+        //    .{ .pos = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } }, //top-right
+        //    .{ .pos = .{ 1.0, -1.0, 0.0 }, .uv = .{ 1.0, 1.0 } }, //bottom-right
+        //    .{ .pos = .{ -1.0, -1.0, 0.0 }, .uv = .{ 0.0, 1.0 } }, //bottom-left
+        //};
 
-        const indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
+        var indices: [MAX_SPRITES_PER_BATCH * 6]u16 = undefined;
+        for (0..MAX_SPRITES_PER_BATCH) |i| {
+            const v: u16 = @intCast(i * 4);
+            const base = i * 6;
+            indices[base..][0..6].* = .{ v + 0, v + 1, v + 2, v + 0, v + 2, v + 3 };
+        }
 
         var buffer_desc = D3D11_BUFFER_DESC{
-            .ByteWidth = @sizeOf(@TypeOf(vertices)),
+            .ByteWidth = @sizeOf(Vertex) * 4 * MAX_SPRITES_PER_BATCH,
+            //.ByteWidth = @sizeOf(@TypeOf(vertices)),
             //.Usage = D3D11_USAGE_IMMUTABLE,
             .Usage = D3D11_USAGE_DYNAMIC,
             .BindFlags = D3D11_BIND_VERTEX_BUFFER,
@@ -725,20 +670,20 @@ const MyDirectXContext = struct {
             .StructureByteStride = 0,
         };
 
-        var init_data = D3D11_SUBRESOURCE_DATA{
-            .pSysMem = &vertices,
-            .SysMemPitch = 0,
-            .SysMemSlicePitch = 0,
-        };
+        //var init_data = D3D11_SUBRESOURCE_DATA{
+        //    .pSysMem = &vertices,
+        //    .SysMemPitch = 0,
+        //    .SysMemSlicePitch = 0,
+        //};
 
         var vertex_buffer: *ID3D11Buffer = undefined;
-        hr = device.CreateBuffer(&buffer_desc, &init_data, @ptrCast(&vertex_buffer));
+        hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
         if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
         errdefer _ = vertex_buffer.IUnknown.Release();
 
         var index_buf_desc = D3D11_BUFFER_DESC{
             .ByteWidth = @sizeOf(@TypeOf(indices)),
-            .Usage = D3D11_USAGE_DEFAULT,
+            .Usage = D3D11_USAGE_IMMUTABLE,
             .BindFlags = D3D11_BIND_INDEX_BUFFER,
             .CPUAccessFlags = .{},
             .MiscFlags = .{},
@@ -809,13 +754,7 @@ const MyDirectXContext = struct {
         };
     }
 
-    fn draw(self: *Self) void {
-        var client_rect: RECT = undefined;
-        _ = GetClientRect(self.hwnd, &client_rect);
-        const win_w = client_rect.right - client_rect.left;
-        const win_h = client_rect.bottom - client_rect.top;
-        if (win_w <= 0 or win_h <= 0) return; // minimized -- nothing to draw
-
+    fn beginPass1(self: *Self) void {
         // --- Pass 1: render the world into the fixed-size game target ---
         var raw_rtvs = [_]?*ID3D11RenderTargetView{self.game_rtv};
         const rtvs: ?[*]?*ID3D11RenderTargetView = &raw_rtvs;
@@ -843,16 +782,14 @@ const MyDirectXContext = struct {
         var raw_sampler2 = [_]?*ID3D11SamplerState{self.sampler};
         const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
         self.context.PSSetSamplers(0, 1, samplers2);
+    }
 
-        //self.context.DrawIndexed(6, 0, 0);
-
-        var src_rect = Rect{ .x = 0, .y = 0, .width = 160, .height = 160 };
-        var dst_rect = Rect{ .x = 10, .y = 10, .width = 620, .height = 340 };
-        self.drawSprite(src_rect, dst_rect);
-
-        src_rect = Rect{ .x = 0, .y = 0, .width = 100, .height = 100 };
-        dst_rect = Rect{ .x = 100, .y = 100, .width = 100, .height = 300 };
-        self.drawSprite(src_rect, dst_rect);
+    fn drawPass2(self: *Self) void {
+        var client_rect: RECT = undefined;
+        _ = GetClientRect(self.hwnd, &client_rect);
+        const win_w = client_rect.right - client_rect.left;
+        const win_h = client_rect.bottom - client_rect.top;
+        if (win_w <= 0 or win_h <= 0) return; // minimized -- nothing to draw
 
         // -- Pass 2: blit game target onto the backbuffer, integer-scaled
         // centered, with black bars for whatever doesn't divide evenly ---
@@ -1016,9 +953,196 @@ const MyDirectXContext = struct {
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
         self.context.DrawIndexed(6, 0, 0);
     }
+
+    fn onResize(self: *Self, new_width: u32, new_height: u32) void {
+        self.context.OMSetRenderTargets(0, null, null);
+
+        //state.context.ClearState();
+        //state.context.Flush();
+
+        //Drop our reference to the old backbuffer RTV before
+        // resizing -- ResizeBuffers fails if anything still
+        // references the swap chain's buffers.
+        if (self.backbuffer_rtv) |old_rtv| {
+            _ = old_rtv.IUnknown.Release();
+            self.backbuffer_rtv = null;
+        }
+
+        const hr = self.swap_chain.ResizeBuffers(0, new_width, new_height, DXGI_FORMAT_UNKNOWN, 0);
+        if (hr != HRESULT.S_OK) {
+            std.debug.print("ResizeBuffers failed: hr={}\n", .{hr});
+
+            var debug_iface: ?*IDXGIDebug = null;
+            if (!DXGIGetDebugInterface1(0, IID_IDXGIDebug, @ptrCast(&debug_iface)).failed) {
+                if (debug_iface) |dbg| {
+                    _ = dbg.ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_DETAIL);
+                    _ = dbg.IUnknown.Release();
+                }
+            }
+        }
+
+        var back_buffer: *ID3D11Texture2D = undefined;
+        if (self.swap_chain.GetBuffer(0, IID_ID3D11Texture2D, @ptrCast(&back_buffer)) == HRESULT.S_OK) {
+            defer _ = back_buffer.IUnknown.Release();
+            var new_rtv: *ID3D11RenderTargetView = undefined;
+            if (!self.device.CreateRenderTargetView(@ptrCast(back_buffer), null, @ptrCast(&new_rtv)).failed) {
+                self.backbuffer_rtv = new_rtv;
+                std.debug.print("RenderTargetSetTo{*}\n", .{new_rtv});
+            } else {
+                std.debug.print("CreateRenderTargetView", .{});
+            }
+        } else {
+            std.debug.print("GetBuffer failed after resize", .{});
+        }
+    }
 };
 
 const Vertex = extern struct {
     pos: [3]f32,
     uv: [2]f32,
+};
+
+const MyBatchDraw = struct {
+    context: *ID3D11DeviceContext,
+    vertex_buffer: *ID3D11Buffer,
+
+    current_texture: ?*ID3D11ShaderResourceView = null,
+    sprite_count: u32 = 0,
+    mapped: D3D11_MAPPED_SUBRESOURCE = undefined,
+
+    fn init(context: *ID3D11DeviceContext, vertex_buffer: *ID3D11Buffer) Self {
+        return .{ .context = context, .vertex_buffer = vertex_buffer };
+    }
+
+    const Self = @This();
+    fn beginBatch(self: *Self) !void {
+        const hr = self.context.Map(
+            @ptrCast(self.vertex_buffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &self.mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        self.sprite_count = 0;
+        self.current_texture = null;
+    }
+
+    fn flush(self: *Self) void {
+        if (self.sprite_count == 0) return;
+        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+
+        var raw_srv = [_]?*ID3D11ShaderResourceView{self.current_texture};
+        const atlas_srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv;
+        self.context.PSSetShaderResources(0, 1, atlas_srvs);
+        self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
+
+        _ = self.context.Map(
+            @ptrCast(self.vertex_buffer),
+            0,
+            //D3D11_MAP_WRITE_NO_OVERWRITE,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &self.mapped,
+        );
+        self.sprite_count = 0;
+    }
+
+    fn drawSprite(self: *Self, srv: *ID3D11ShaderResourceView, textureWidth: u32, textureHeight: u32, source_rect: Rect, dest_rect: Rect) void {
+        if (self.sprite_count == MAX_SPRITES_PER_BATCH) {
+            self.flush();
+        }
+        if (self.current_texture != null and self.current_texture.? != srv) {
+            self.flush();
+        }
+        self.current_texture = srv;
+
+        const dst: [*]Vertex = @ptrCast(@alignCast(self.mapped.pData));
+
+        // source rect
+        const _u0 = source_rect.x / @as(f32, @floatFromInt(textureWidth));
+        const v0 = source_rect.y / @as(f32, @floatFromInt(textureHeight));
+        const _u1 = (source_rect.x + source_rect.width) / @as(f32, @floatFromInt(textureWidth));
+        const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(textureHeight));
+
+        //dest rect
+        const ndc_x0 = (dest_rect.x / game_width) * 2.0 - 1.0;
+        const ndc_y0 = 1.0 - (dest_rect.y / game_height) * 2.0; // y flips
+        const ndc_x1 = ((dest_rect.x + dest_rect.width) / game_width) * 2.0 - 1.0;
+        const ndc_y1 = 1.0 - ((dest_rect.y + dest_rect.height) / game_height) * 2.0;
+
+        const quad_vertices = [_]Vertex{
+            .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
+            .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
+            .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 } }, //bottom-right
+            .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
+        };
+
+        @memcpy(dst[self.sprite_count * 4 .. self.sprite_count * 4 + 4], &quad_vertices);
+
+        self.sprite_count += 1;
+    }
+};
+
+const MyPlatform = struct {
+    cx: MyDirectXContext,
+    batch: MyBatchDraw,
+
+    const Self = @This();
+    fn deinit(self: *Self) void {
+        self.cx.deinit();
+    }
+
+    fn init(cx: MyDirectXContext) Self {
+        return .{ .cx = cx, .batch = .init(cx.context, cx.vertex_buffer) };
+    }
+
+    fn beginDraw(self: *Self) void {
+        self.cx.beginPass1();
+        self.batch.beginBatch() catch unreachable;
+    }
+
+    fn endDraw(self: *Self) void {
+        self.batch.flush();
+        self.cx.drawPass2();
+    }
+
+    fn draw(self: *Self) void {
+        self.beginDraw();
+
+        const source_rect = Rect{ .x = 0, .y = 0, .width = 30, .height = 30 };
+        for (0..5000) |i| {
+            const x: f32 = @floatFromInt(i);
+            const xx = @mod(x * 10, 540);
+            const yy = @divFloor(x, 540);
+            const dest_rect = Rect{ .x = 10 + xx, .y = 100 + yy * 100 + std.math.sin(x * 70) * 30, .width = 10, .height = 10 };
+            self.batch.drawSprite(self.cx.atlas_srv, 160, 160, source_rect, dest_rect);
+        }
+
+        self.endDraw();
+    }
+
+    fn runGameLoop(self: *Self) !void {
+        var msg: MSG = undefined;
+
+        var running = true;
+
+        while (running) {
+            while (PeekMessageA(&msg, null, 0, 0, PM_REMOVE) != 0) {
+                if (msg.message == WM_QUIT) {
+                    running = false;
+                    break;
+                }
+
+                _ = TranslateMessage(&msg);
+                _ = DispatchMessageA(&msg);
+            }
+
+            if (!running) break;
+
+            self.draw();
+            // update();
+            // render();
+        }
+    }
 };
