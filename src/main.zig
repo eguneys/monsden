@@ -114,6 +114,10 @@ pub fn main(init: std.process.Init) !void {
     const a = try mywic_factory.png(atlasPngU16, &pngBuf);
     std.debug.print("\n{d}\n", .{a.len});
 
+    const atlas_width = 160;
+    const atlas_height = 160;
+    const pixel_buffer = pngBuf;
+
     // this seems somewhat related to scaling the window
     _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
@@ -161,7 +165,7 @@ pub fn main(init: std.process.Init) !void {
     if (hwnd) |hwndV| {
         _ = ShowWindow(hwndV, SW_SHOW);
 
-        var context: MyDirectXContext = try .init(hwndV);
+        var context: MyDirectXContext = try .init(hwndV, atlas_width, atlas_height, &pixel_buffer);
         defer context.deinit();
 
         _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(&context)));
@@ -398,6 +402,11 @@ const IID_IDXGIFactory = win32.graphics.dxgi.IID_IDXGIFactory;
 
 const DXGI_MWA_NO_ALT_ENTER = win32.graphics.dxgi.DXGI_MWA_NO_ALT_ENTER;
 
+const DXGI_FORMAT_R32G32_FLOAT = win32.graphics.dxgi.common.DXGI_FORMAT_R32G32_FLOAT;
+const DXGI_FORMAT_R16_UINT = win32.graphics.dxgi.common.DXGI_FORMAT_R16_UINT;
+
+const D3D11_BIND_INDEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_INDEX_BUFFER;
+
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
 
@@ -409,6 +418,8 @@ const MyDirectXContext = struct {
 
     input_layout: *ID3D11InputLayout,
     vertex_buffer: *ID3D11Buffer,
+
+    index_buffer: *ID3D11Buffer,
 
     vertex_shader: *ID3D11VertexShader,
     pixel_shader: *ID3D11PixelShader,
@@ -423,6 +434,8 @@ const MyDirectXContext = struct {
     null_srv: ?*ID3D11ShaderResourceView,
 
     game_srv: *ID3D11ShaderResourceView,
+
+    atlas_srv: *ID3D11ShaderResourceView,
 
     sampler: *ID3D11SamplerState,
 
@@ -445,8 +458,11 @@ const MyDirectXContext = struct {
 
         _ = self.game_srv.IUnknown.Release();
 
+        _ = self.atlas_srv.IUnknown.Release();
+
         _ = self.input_layout.IUnknown.Release();
         _ = self.vertex_buffer.IUnknown.Release();
+        _ = self.index_buffer.IUnknown.Release();
 
         _ = self.vertex_shader.IUnknown.Release();
         _ = self.pixel_shader.IUnknown.Release();
@@ -464,7 +480,7 @@ const MyDirectXContext = struct {
         _ = self.swap_chain.IUnknown.Release();
     }
 
-    fn init(hwnd: HWND) !MyDirectXContext {
+    fn init(hwnd: HWND, atlas_width: u32, atlas_height: u32, pixel_buffer: []const u8) !MyDirectXContext {
         const swap_chain_desc = DXGI_SWAP_CHAIN_DESC{
             .BufferDesc = .{
                 .Width = @intCast(client_width),
@@ -531,6 +547,30 @@ const MyDirectXContext = struct {
             errdefer _ = backbuffer_rtv.IUnknown.Release();
         }
 
+        var atlas_tex_desc = D3D11_TEXTURE2D_DESC{
+            .Width = atlas_width,
+            .Height = atlas_height,
+            .MipLevels = 1,
+            .ArraySize = 1,
+            .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Usage = D3D11_USAGE_DEFAULT,
+            .BindFlags = .{ .SHADER_RESOURCE = 1 },
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+        };
+
+        const atlas_init_data = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = pixel_buffer.ptr,
+            .SysMemPitch = atlas_width * 4,
+            .SysMemSlicePitch = 0,
+        };
+
+        var atlas_tex: *ID3D11Texture2D = undefined;
+        hr = device.CreateTexture2D(&atlas_tex_desc, &atlas_init_data, @ptrCast(&atlas_tex));
+        if (hr != HRESULT.S_OK) return error.CreateAtlasTextureFailed;
+        defer _ = atlas_tex.IUnknown.Release();
+
         // --- Offscreen "game" render target: fixed at game_width x
         // game_height  for the lifetime of the program.
         var game_tex_desc = D3D11_TEXTURE2D_DESC{
@@ -559,6 +599,11 @@ const MyDirectXContext = struct {
         var game_srv: *ID3D11ShaderResourceView = undefined;
         hr = device.CreateShaderResourceView(@ptrCast(game_tex), null, @ptrCast(&game_srv));
         if (hr != HRESULT.S_OK) return error.CreateGameSRVFailed;
+        errdefer _ = game_srv.IUnknown.Release();
+
+        var atlas_srv: *ID3D11ShaderResourceView = undefined;
+        hr = device.CreateShaderResourceView(@ptrCast(atlas_tex), null, @ptrCast(&atlas_srv));
+        if (hr != HRESULT.S_OK) return error.CreateAtlasSRVFailed;
         errdefer _ = game_srv.IUnknown.Release();
 
         const game_viewport = D3D11_VIEWPORT{
@@ -629,11 +674,11 @@ const MyDirectXContext = struct {
                 .InstanceDataStepRate = 0,
             },
             .{
-                .SemanticName = "COLOR",
+                .SemanticName = "TEXCOORD",
                 .SemanticIndex = 0,
-                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
+                .Format = DXGI_FORMAT_R32G32_FLOAT,
                 .InputSlot = 0,
-                .AlignedByteOffset = 12, // 3 floats of POSITION
+                .AlignedByteOffset = 12, // 3 floats * 4 bytes = offset past pos
                 .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
                 .InstanceDataStepRate = 0,
             },
@@ -654,14 +699,17 @@ const MyDirectXContext = struct {
         // (no view/projection matrix yet)
         const Vertex = extern struct {
             pos: [3]f32,
-            color: [4]f32,
+            uv: [2]f32,
         };
 
         const vertices = [_]Vertex{
-            .{ .pos = .{ 1.0, 1.0, 0.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-            .{ .pos = .{ 1.0, -1.0, 0.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } },
-            .{ .pos = .{ -1.0, -1.0, 0.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } },
+            .{ .pos = .{ -1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } }, // top-left
+            .{ .pos = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } }, //top-right
+            .{ .pos = .{ 1.0, -1.0, 0.0 }, .uv = .{ 1.0, 1.0 } }, //bottom-right
+            .{ .pos = .{ -1.0, -1.0, 0.0 }, .uv = .{ 0.0, 1.0 } }, //bottom-left
         };
+
+        const indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
 
         var buffer_desc = D3D11_BUFFER_DESC{
             .ByteWidth = @sizeOf(@TypeOf(vertices)),
@@ -682,6 +730,25 @@ const MyDirectXContext = struct {
         hr = device.CreateBuffer(&buffer_desc, &init_data, @ptrCast(&vertex_buffer));
         if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
         errdefer _ = vertex_buffer.IUnknown.Release();
+
+        var index_buf_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(@TypeOf(indices)),
+            .Usage = D3D11_USAGE_DEFAULT,
+            .BindFlags = D3D11_BIND_INDEX_BUFFER,
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+        var ib_init = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = &indices,
+            .SysMemPitch = 0,
+            .SysMemSlicePitch = 0,
+        };
+
+        var index_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&index_buf_desc, &ib_init, @ptrCast(&index_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateIndexBufferFailed;
+        errdefer _ = index_buffer.IUnknown.Release();
 
         // --- Blit Shaders (fullscreen triangle, no vertex buffer needed) ---
         var blit_vertex_shader: *ID3D11VertexShader = undefined;
@@ -709,6 +776,7 @@ const MyDirectXContext = struct {
             .null_srv = null_srv,
 
             .game_srv = game_srv,
+            .atlas_srv = atlas_srv,
 
             .sampler = sampler,
 
@@ -722,6 +790,7 @@ const MyDirectXContext = struct {
 
             .hwnd = hwnd,
             .vertex_buffer = vertex_buffer,
+            .index_buffer = index_buffer,
             .input_layout = input_layout,
 
             .backbuffer_rtv = backbuffer_rtv,
@@ -757,7 +826,18 @@ const MyDirectXContext = struct {
 
         self.context.VSSetShader(self.vertex_shader, null, 0);
         self.context.PSSetShader(self.pixel_shader, null, 0);
-        self.context.Draw(3, 0);
+
+        self.context.IASetIndexBuffer(self.index_buffer, DXGI_FORMAT_R16_UINT, 0);
+
+        var raw_srv2 = [_]?*ID3D11ShaderResourceView{self.atlas_srv};
+        const atlas_srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv2;
+        self.context.PSSetShaderResources(0, 1, atlas_srvs);
+
+        var raw_sampler2 = [_]?*ID3D11SamplerState{self.sampler};
+        const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
+        self.context.PSSetSamplers(0, 1, samplers2);
+
+        self.context.DrawIndexed(6, 0, 0);
 
         // -- Pass 2: blit game target onto the backbuffer, integer-scaled
         // centered, with black bars for whatever doesn't divide evenly ---
