@@ -1,6 +1,9 @@
 const std = @import("std");
 const Io = std.Io;
 
+const png = @import("png.zig");
+const MyAssetsPathLocator = @import("assets.zig").MyAssetsPathLocator;
+
 const win32 = @import("win32/zigwin32/win32.zig");
 
 const GetModuleHandleA = win32.kernel32.GetModuleHandleA;
@@ -74,6 +77,7 @@ const HWND_TOP = win32.ui.windows_and_messaging.HWND_TOPMOST;
 
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
+    const allocator = arena;
 
     const args = try init.minimal.args.toSlice(arena);
     for (args) |arg| {
@@ -87,6 +91,28 @@ pub fn main(init: std.process.Init) !void {
     const stdout_writer = &stdout_file_writer.interface;
 
     try stdout_writer.flush();
+
+    try png.MyComInitialize();
+    var mywic_factory = try png.MyWicFactory.init();
+    defer mywic_factory.deinit();
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exePath = try MyAssetsPathLocator.executableDirPath(io, &buf);
+
+    const atlasPngPath = try MyAssetsPathLocator.atlasPngPath(allocator, exePath);
+    defer allocator.free(atlasPngPath);
+
+    const atlasPngU16 = try MyAssetsPathLocator.convertToU16WindowsPath(allocator, atlasPngPath);
+    defer allocator.free(atlasPngU16);
+    //const slice: []const u16 = std.mem.span(atlasPgnU16);
+
+    //std.debug.print("Exe: {s}\n", .{exePath});
+    //std.debug.print("AtlasPgn: {s}\n", .{atlasPgnPath});
+    //std.debug.print("atlasU16: {f}\n", .{std.unicode.fmtUtf16Le(slice)});
+
+    var pngBuf: [1024 * 100 * 1]u8 = undefined;
+    const a = try mywic_factory.png(atlasPngU16, &pngBuf);
+    std.debug.print("\n{d}\n", .{a.len});
 
     // this seems somewhat related to scaling the window
     _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

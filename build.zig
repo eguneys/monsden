@@ -53,6 +53,15 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&compile_blit_vs.step);
     exe.step.dependOn(&compile_blit_ps.step);
 
+    // single file
+    //b.installFile("data/opening.pgn", "bin/opening.pgn");
+
+    b.installDirectory(.{
+        .source_dir = b.path("src/assets"),
+        .install_dir = .bin,
+        .install_subdir = "assets",
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
