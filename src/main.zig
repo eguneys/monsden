@@ -386,7 +386,8 @@ const DXGI_FORMAT_UNKNOWN = win32.graphics.dxgi.common.DXGI_FORMAT_UNKNOWN;
 
 const D3D11_USAGE_DEFAULT = win32.graphics.direct3d11.D3D11_USAGE_DEFAULT;
 
-const D3D11_FILTER_MIN_MAX_MIP_LINEAR = win32.graphics.direct3d11.D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+const D3D11_FILTER_MIN_MAG_MIP_POINT = win32.graphics.direct3d11.D3D11_FILTER_MIN_MAG_MIP_POINT;
+const D3D11_FILTER_MIN_MAG_MIP_LINEAR = win32.graphics.direct3d11.D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 const D3D11_TEXTURE_ADDRESS_CLAMP = win32.graphics.direct3d11.D3D11_TEXTURE_ADDRESS_CLAMP;
 const D3D11_COMPARISON_NEVER = win32.graphics.direct3d11.D3D11_COMPARISON_NEVER;
 const D3D11_FLOAT32_MAX = win32.graphics.direct3d11.D3D11_FLOAT32_MAX;
@@ -616,7 +617,7 @@ const MyDirectXContext = struct {
         };
 
         var sampler_desc = D3D11_SAMPLER_DESC{
-            .Filter = D3D11_FILTER_MIN_MAX_MIP_LINEAR,
+            .Filter = D3D11_FILTER_MIN_MAG_MIP_POINT,
             .AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
             .AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
             .AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,
