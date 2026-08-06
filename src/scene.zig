@@ -14,6 +14,9 @@ pub const Scene = struct {
     }
 
     pub fn render(self: *Self) void {
+        //self.batch.draw_bg(0, 0, 100, 100, 5, 5, 20, 20);
+
+        //self.batch.draw_spr(0, 0, 20, 20, 50, 50, 2, 2);
         _ = self;
     }
 };

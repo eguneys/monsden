@@ -15,12 +15,21 @@ pub const MySpriteBatch = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         var texture = self.platform.resources.texSprites;
-        self.platform.batch.drawSprite(&texture, source_rect, dest_rect);
+        self.platform.batch.drawSprite(&texture, source_rect, dest_rect) catch unreachable;
+    }
+    fn drawBgImpl(ctx: *anyopaque, source_rect: Rect, dest_rect: Rect) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        var texture = self.platform.resources.texBackground;
+        self.platform.batch.drawSprite(&texture, source_rect, dest_rect) catch unreachable;
     }
 
-    const vtable = SpriteBatch.VTable{ .drawSprite = drawSpriteImpl };
+    const vtable = SpriteBatch.VTable{
+        .drawSprite = drawSpriteImpl,
+        .drawBg = drawBgImpl,
+    };
 
-    pub fn spriteBatch(self: *MySpriteBatch) SpriteBatch {
+    pub fn spriteBatch(self: *Self) SpriteBatch {
         return .{
             .ptr = self,
             .vtable = &vtable,

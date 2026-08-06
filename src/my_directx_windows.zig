@@ -140,8 +140,9 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
 
         var context: MyDirectXContext = try .init(hwndV);
         const resources: MyTextureResources = try .init(io, allocator, &context);
+        var batch: MyBatchDraw = .init(context.context, context.vertex_buffer);
 
-        const platform: MyPlatform = .init(context, resources);
+        const platform: MyPlatform = .init(&context, &batch, resources);
 
         var mgp = MyGamePlatform{ .platform = platform };
         var spritebatch = MySpriteBatch{ .platform = platform };
@@ -962,10 +963,10 @@ pub const MyBatchDraw = struct {
 
     const Self = @This();
 
-    fn SetShaderResourceForTexture(self: *Self, texture: MyTexture) void {
+    fn SetShaderResourceForTexture(self: *Self, texture: *MyTexture) void {
+        std.debug.print("set shader resource {*}", .{texture});
         var raw_srv = [_]?*ID3D11ShaderResourceView{texture.Srv};
-        const srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv;
-        self.context.PSSetShaderResources(0, 1, srvs);
+        self.context.PSSetShaderResources(0, 1, @ptrCast(&raw_srv));
     }
 
     fn beginBatch(self: *Self) !void {
@@ -981,14 +982,17 @@ pub const MyBatchDraw = struct {
         self.current_texture = null;
     }
 
-    fn flush(self: *Self) void {
+    fn flush(self: *Self) !void {
         if (self.sprite_count == 0) return;
+
+        self.SetShaderResourceForTexture(self.current_texture.?);
+
+        std.debug.print("current {*}\n", .{self.current_texture.?});
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
 
-        self.SetShaderResourceForTexture(self.current_texture.?.*);
         self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
 
-        _ = self.context.Map(
+        const hr = self.context.Map(
             @ptrCast(self.vertex_buffer),
             0,
             //D3D11_MAP_WRITE_NO_OVERWRITE,
@@ -996,16 +1000,19 @@ pub const MyBatchDraw = struct {
             0,
             &self.mapped,
         );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
         self.sprite_count = 0;
     }
 
-    pub fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect) void {
+    pub fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect) !void {
+        std.debug.print("draw sprite{*}\n", .{texture});
         if (self.sprite_count == MAX_SPRITES_PER_BATCH) {
-            self.flush();
+            try self.flush();
         }
         if (self.current_texture != null and self.current_texture.? != texture) {
-            self.flush();
+            try self.flush();
         }
+        std.debug.print("texture {*}\n", .{texture});
         self.current_texture = texture;
 
         const dst: [*]Vertex = @ptrCast(@alignCast(self.mapped.pData));
@@ -1029,7 +1036,19 @@ pub const MyBatchDraw = struct {
             .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
         };
 
-        @memcpy(dst[self.sprite_count * 4 .. self.sprite_count * 4 + 4], &quad_vertices);
+        const first = self.sprite_count * 4;
+        const last = first + 4;
+
+        std.debug.assert(last <= MAX_SPRITES_PER_BATCH * 4);
+
+        std.debug.print("{}..{}\n", .{ first, last });
+
+        const base = self.sprite_count * 4;
+
+        dst[base + 0] = quad_vertices[0];
+        dst[base + 1] = quad_vertices[1];
+        dst[base + 2] = quad_vertices[2];
+        dst[base + 3] = quad_vertices[3];
 
         self.sprite_count += 1;
     }
@@ -1046,8 +1065,8 @@ const MyTexture = struct {
 };
 
 pub const MyPlatform = struct {
-    cx: MyDirectXContext,
-    batch: MyBatchDraw,
+    cx: *MyDirectXContext,
+    batch: *MyBatchDraw,
     resources: MyTextureResources,
 
     const Self = @This();
@@ -1056,10 +1075,10 @@ pub const MyPlatform = struct {
         self.resources.deinit();
     }
 
-    fn init(cx: MyDirectXContext, resources: MyTextureResources) Self {
+    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, resources: MyTextureResources) Self {
         return .{
             .cx = cx,
-            .batch = .init(cx.context, cx.vertex_buffer),
+            .batch = batch,
             .resources = resources,
         };
     }
@@ -1070,7 +1089,7 @@ pub const MyPlatform = struct {
     }
 
     pub fn endDraw(self: *Self) void {
-        self.batch.flush();
+        self.batch.flush() catch unreachable;
         self.cx.drawPass2();
     }
 
