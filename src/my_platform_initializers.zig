@@ -38,12 +38,14 @@ pub const MySpriteBatch = struct {
 pub const MyGamePlatform = struct {
     platform: MyPlatform,
 
+    batch: MySpriteBatch,
+
     pub fn deinit(self: *Self) void {
         self.platform.deinit();
     }
 
     pub fn init(platform: MyPlatform) Self {
-        return .{ .platform = platform };
+        return .{ .platform = platform, .batch = .{ .platform = platform } };
     }
 
     const Self = @This();
@@ -79,6 +81,11 @@ pub const MyGamePlatform = struct {
         self.platform.deinit();
     }
 
+    fn spriteBatchImpl(ctx: *anyopaque) SpriteBatch {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.batch.spriteBatch();
+    }
+
     const vtable = GamePlatform.VTable{
         .peekMessages = peekMessagesImpl,
         .toggleFullscreen = toggleFullscreenImpl,
@@ -86,6 +93,7 @@ pub const MyGamePlatform = struct {
         .endDraw = endDrawImpl,
         .onResize = onResizeImpl,
         .deinit = deinitImpl,
+        .spriteBatch = spriteBatchImpl,
     };
 
     pub fn getPlatform(self: *MyGamePlatform) GamePlatform {

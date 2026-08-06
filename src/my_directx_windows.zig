@@ -6,8 +6,6 @@ const loop = @import("loop.zig");
 const GameManager = loop.GameManager;
 const GameLoop = loop.GameLoop;
 
-const Scene = @import("scene.zig");
-
 const MySpriteBatch = @import("my_platform_initializers.zig").MySpriteBatch;
 const MyGamePlatform = @import("my_platform_initializers.zig").MyGamePlatform;
 
@@ -144,18 +142,16 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
 
         const platform: MyPlatform = .init(&context, &batch, resources);
 
-        var mgp = MyGamePlatform{ .platform = platform };
-        var spritebatch = MySpriteBatch{ .platform = platform };
+        var mgp: MyGamePlatform = .init(platform);
 
         var gm = GameManager.init(
             mgp.getPlatform(),
-            .init(spritebatch.spriteBatch()),
         );
         defer gm.deinit();
 
         _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(&gm)));
 
-        var game_loop = GameLoop.init();
+        var game_loop = GameLoop.init(io);
         game_loop.run(&gm);
     } else {
         const err = GetLastError();
@@ -199,7 +195,7 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
                 const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if (user_data == 0) return 0;
                 const state: *GameManager = @ptrFromInt(@as(usize, @bitCast(user_data)));
-                state.render();
+                state.render(0);
             }
             return 0;
         },

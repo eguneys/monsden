@@ -1,4 +1,8 @@
-const Scene = @import("scene.zig").Scene;
+const std = @import("std");
+const Io = std.Io;
+
+const scn = @import("scene.zig");
+const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
 
 pub const GamePlatform = struct {
     ptr: *anyopaque,
@@ -11,6 +15,7 @@ pub const GamePlatform = struct {
         endDraw: *const fn (ctx: *anyopaque) void,
         onResize: *const fn (ctx: *anyopaque, new_width: u32, new_height: u32) void,
         deinit: *const fn (ctx: *anyopaque) void,
+        spriteBatch: *const fn (ctx: *anyopaque) SpriteBatch,
     };
 
     pub fn deinit(self: *Self) void {
@@ -22,6 +27,10 @@ pub const GamePlatform = struct {
         const shouldQuit = self.vtable.peekMessages(self.ptr);
 
         return shouldQuit;
+    }
+
+    pub fn spriteBatch(self: *Self) SpriteBatch {
+        return self.vtable.spriteBatch(self.ptr);
     }
 
     pub fn toggleFullscreen(self: *Self) void {
@@ -43,7 +52,7 @@ pub const GamePlatform = struct {
 
 pub const GameManager = struct {
     platform: GamePlatform,
-    scene: Scene,
+    scene: scn.Scene,
 
     const Self = @This();
 
@@ -52,47 +61,82 @@ pub const GameManager = struct {
         //self.scene.deinit();
     }
 
-    pub fn init(platform: GamePlatform, scene: Scene) Self {
-        return .{ .platform = platform, .scene = scene };
+    pub fn init(platform: GamePlatform) Self {
+        return .{ .platform = platform, .scene = .init() };
     }
 
-    pub fn update(self: *Self, dt: f32) bool {
+    pub fn update(self: *Self, dt: f64) bool {
         const shouldQuit = self.platform.update();
         if (shouldQuit) {
             return true;
         }
-        self.scene.update(dt);
+        scn.updateScene(&self.scene, dt);
         return false;
     }
 
-    pub fn render(self: *Self) void {
+    pub fn render(self: *Self, alpha: f32) void {
         self.platform.beginDraw();
-        self.scene.render();
+        scn.renderScene(self.platform.spriteBatch(), self.scene, alpha);
         self.platform.endDraw();
     }
 };
 
 pub const GameLoop = struct {
+    io: Io,
     running: bool,
 
     const Self = @This();
 
-    pub fn init() Self {
-        return .{ .running = true };
+    pub fn init(io: Io) Self {
+        return .{ .io = io, .running = true };
     }
 
     pub fn run(self: *Self, game: *GameManager) void {
-        while (self.running) {
-            const shouldQuit = game.update(0);
+        const fixed_dt: f64 = 1.0 / 60.0; // 60 updates per second
+        const max_frame_time: f64 = 0.25; // Prevents "spiral of death" if window is dragged
 
-            if (shouldQuit) {
-                self.running = false;
-                break;
+        //var timer = std.time.Timer.start() catch unreachable;
+        //var last_time: u64 = timer.read();
+
+        var last_time = Io.Clock.real.now(self.io);
+        var accumulator: f64 = 0.0;
+
+        while (self.running) {
+            const current_time = Io.Clock.real.now(self.io);
+            const frame_time_ns = Io.Timestamp.durationTo(last_time, current_time).toNanoseconds();
+            last_time = current_time;
+
+            // Convert nanoseconds to seconds, capped to avoid huge spikes
+            var frame_time: f64 = @as(f64, @floatFromInt(frame_time_ns)) / 1_000_000_000.0;
+            if (frame_time > max_frame_time) {
+                frame_time = max_frame_time;
             }
 
-            game.render();
+            accumulator += frame_time;
 
-            // sleep ? elapsed_time accumulator render alpha etc.
+            // 1. Fixed update loop (runs zero, one, or multiple times per frame)
+            while (accumulator >= fixed_dt) {
+                // If GameManager needs to return quit status from updates:
+                const shouldQuit = game.update(fixed_dt); // pass fixed_dt if needed, or constant ticks
+                if (shouldQuit) {
+                    self.running = false;
+                    break;
+                }
+                accumulator -= fixed_dt;
+            }
+
+            if (!self.running) break;
+
+            // 2. Calculate interpolation alpha for smooth rendering
+            // (how far we are into the *next* fixed step, from 0.0 to 1.0)
+            const alpha = @as(f32, @floatCast(accumulator / fixed_dt));
+
+            // 3. Render using alpha to smooth out the frame rate mismatch
+            game.render(alpha);
+
+            // 4. Optional yield / sleep to prevent 100% CPU usage if vsync is off
+            // (Or rely on your windowing/renderer's internal vsync/swapbuffers limit)
+            //std.time.sleep(1 * std.time.ns_per_ms);
         }
     }
 };
