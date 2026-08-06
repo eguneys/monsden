@@ -1,0 +1,90 @@
+const math = @import("math.zig");
+const Rect = math.Rect;
+
+const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
+const GamePlatform = @import("loop.zig").GamePlatform;
+
+const MyPlatform = @import("my_directx_windows.zig").MyPlatform;
+
+pub const MySpriteBatch = struct {
+    const Self = @This();
+
+    platform: MyPlatform,
+
+    fn drawSpriteImpl(ctx: *anyopaque, source_rect: Rect, dest_rect: Rect) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        var texture = self.platform.resources.texSprites;
+        self.platform.batch.drawSprite(&texture, source_rect, dest_rect);
+    }
+
+    const vtable = SpriteBatch.VTable{ .drawSprite = drawSpriteImpl };
+
+    pub fn spriteBatch(self: *MySpriteBatch) SpriteBatch {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
+        };
+    }
+};
+
+pub const MyGamePlatform = struct {
+    platform: MyPlatform,
+
+    pub fn deinit(self: *Self) void {
+        self.platform.deinit();
+    }
+
+    pub fn init(platform: MyPlatform) Self {
+        return .{ .platform = platform };
+    }
+
+    const Self = @This();
+    fn peekMessagesImpl(ctx: *anyopaque) bool {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        _ = self;
+
+        return MyPlatform.peekMessages();
+    }
+
+    fn toggleFullscreenImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        return self.platform.cx.toggleFullscreen();
+    }
+    fn beginDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.platform.beginDraw();
+    }
+    fn endDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        return self.platform.endDraw();
+    }
+    fn onResizeImpl(ctx: *anyopaque, new_width: u32, new_height: u32) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        return self.platform.cx.onResize(new_width, new_height);
+    }
+
+    fn deinitImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.deinit();
+    }
+
+    const vtable = GamePlatform.VTable{
+        .peekMessages = peekMessagesImpl,
+        .toggleFullscreen = toggleFullscreenImpl,
+        .beginDraw = beginDrawImpl,
+        .endDraw = endDrawImpl,
+        .onResize = onResizeImpl,
+        .deinit = deinitImpl,
+    };
+
+    pub fn getPlatform(self: *MyGamePlatform) GamePlatform {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
+        };
+    }
+};
