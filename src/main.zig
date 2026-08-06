@@ -314,6 +314,16 @@ const D3D11_FLOAT32_MAX = win32.graphics.direct3d11.D3D11_FLOAT32_MAX;
 const D3D11_RASTERIZER_DESC = win32.graphics.direct3d11.D3D11_RASTERIZER_DESC;
 const ID3D11RasterizerState = win32.graphics.direct3d11.ID3D11RasterizerState;
 
+const D3D11_BLEND_DESC = win32.graphics.direct3d11.D3D11_BLEND_DESC;
+const ID3D11BlendState = win32.graphics.direct3d11.ID3D11BlendState;
+const D3D11_RENDER_TARGET_BLEND_DESC = win32.graphics.direct3d11.D3D11_RENDER_TARGET_BLEND_DESC;
+const D3D11_BLEND_SRC_ALPHA = win32.graphics.direct3d11.D3D11_BLEND_SRC_ALPHA;
+const D3D11_BLEND_INV_SRC_ALPHA = win32.graphics.direct3d11.D3D11_BLEND_INV_SRC_ALPHA;
+const D3D11_BLEND_OP_ADD = win32.graphics.direct3d11.D3D11_BLEND_OP_ADD;
+const D3D11_BLEND_ONE = win32.graphics.direct3d11.D3D11_BLEND_ONE;
+
+const D3D11_COLOR_WRITE_ENABLE_ALL = win32.graphics.direct3d11.D3D11_COLOR_WRITE_ENABLE_ALL;
+
 const D3D11_FILL_SOLID = win32.graphics.direct3d11.D3D11_FILL_SOLID;
 const D3D11_CULL_NONE = win32.graphics.direct3d11.D3D11_CULL_NONE;
 
@@ -365,6 +375,8 @@ const MyDirectXContext = struct {
 
     rasterizer_state: *ID3D11RasterizerState,
 
+    blend_state: *ID3D11BlendState,
+
     hwnd: HWND,
 
     game_viewport: D3D11_VIEWPORT,
@@ -393,6 +405,8 @@ const MyDirectXContext = struct {
         _ = self.blit_pixel_shader.IUnknown.Release();
 
         _ = self.rasterizer_state.IUnknown.Release();
+
+        _ = self.blend_state.IUnknown.Release();
 
         if (self.backbuffer_rtv) |backbuffer_rtv|
             _ = backbuffer_rtv.IUnknown.Release();
@@ -544,6 +558,28 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateRasterizerStateFailed;
         errdefer _ = rasterizer_state.IUnknown.Release();
 
+        var blend_desc = D3D11_BLEND_DESC{
+            .AlphaToCoverageEnable = FALSE,
+            .IndependentBlendEnable = FALSE,
+            .RenderTarget = undefined,
+        };
+
+        blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC{
+            .BlendEnable = TRUE,
+            .SrcBlend = D3D11_BLEND_SRC_ALPHA,
+            .DestBlend = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOp = D3D11_BLEND_OP_ADD,
+            .SrcBlendAlpha = D3D11_BLEND_ONE,
+            .DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOpAlpha = D3D11_BLEND_OP_ADD,
+            .RenderTargetWriteMask = @intFromEnum(D3D11_COLOR_WRITE_ENABLE_ALL),
+        };
+
+        var blend_state: *ID3D11BlendState = undefined;
+        hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
+        if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
+        errdefer _ = blend_state.IUnknown.Release();
+
         // Shader additions
 
         var vertex_shader: *ID3D11VertexShader = undefined;
@@ -660,6 +696,7 @@ const MyDirectXContext = struct {
             .sampler = sampler,
 
             .rasterizer_state = rasterizer_state,
+            .blend_state = blend_state,
 
             .vertex_shader = vertex_shader,
             .pixel_shader = pixel_shader,
@@ -738,6 +775,10 @@ const MyDirectXContext = struct {
         var raw_sampler2 = [_]?*ID3D11SamplerState{self.sampler};
         const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
         self.context.PSSetSamplers(0, 1, samplers2);
+
+        const blendFactor: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 };
+        const sampleMask = 0xffffffff;
+        self.context.OMSetBlendState(self.blend_state, @ptrCast(&blendFactor), sampleMask);
     }
 
     fn drawPass2(self: *Self) void {
@@ -749,6 +790,7 @@ const MyDirectXContext = struct {
 
         // -- Pass 2: blit game target onto the backbuffer, integer-scaled
         // centered, with black bars for whatever doesn't divide evenly ---
+        self.context.OMSetBlendState(null, null, 0xffffffff);
 
         var raw_backbuffer_rtvs = [_]?*ID3D11RenderTargetView{self.backbuffer_rtv};
         const backbuffer_rtvs: ?[*]?*ID3D11RenderTargetView = &raw_backbuffer_rtvs;
@@ -1035,12 +1077,12 @@ const MyPlatform = struct {
         const source_rect = Rect{ .x = 0, .y = 0, .width = 30, .height = 30 };
 
         self.batch.drawSprite(&self.resources.texBackground, source_rect, .{ .x = 5, .y = 5, .width = 630, .height = 350 });
-        for (0..5000) |i| {
+        const source_rect2 = Rect{ .x = 0, .y = 0, .width = 32, .height = 32 };
+        for (0..10) |i| {
             const x: f32 = @floatFromInt(i);
-            const xx = @mod(x * 10, 540);
-            const yy = @divFloor(x, 540);
-            const dest_rect = Rect{ .x = 10 + xx, .y = 100 + yy * 100 + std.math.sin(x * 70) * 30, .width = 10, .height = 10 };
-            self.batch.drawSprite(&self.resources.texSprites, source_rect, dest_rect);
+            const y: f32 = 120.0;
+            const dest_rect = Rect{ .x = x * 40, .y = y, .width = 64, .height = 64 };
+            self.batch.drawSprite(&self.resources.texSprites, source_rect2, dest_rect);
         }
 
         self.endDraw();
