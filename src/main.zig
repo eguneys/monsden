@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
 const png = @import("png.zig");
@@ -80,7 +81,6 @@ const HWND_TOP = win32.ui.windows_and_messaging.HWND_TOPMOST;
 
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
-    const allocator = arena;
 
     const args = try init.minimal.args.toSlice(arena);
     for (args) |arg| {
@@ -96,30 +96,6 @@ pub fn main(init: std.process.Init) !void {
     try stdout_writer.flush();
 
     try png.MyComInitialize();
-    var mywic_factory = try png.MyWicFactory.init();
-    defer mywic_factory.deinit();
-
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exePath = try MyAssetsPathLocator.executableDirPath(io, &buf);
-
-    const atlasPngPath = try MyAssetsPathLocator.atlasPngPath(allocator, exePath);
-    defer allocator.free(atlasPngPath);
-
-    const atlasPngU16 = try MyAssetsPathLocator.convertToU16WindowsPath(allocator, atlasPngPath);
-    defer allocator.free(atlasPngU16);
-    //const slice: []const u16 = std.mem.span(atlasPgnU16);
-
-    //std.debug.print("Exe: {s}\n", .{exePath});
-    //std.debug.print("AtlasPgn: {s}\n", .{atlasPgnPath});
-    //std.debug.print("atlasU16: {f}\n", .{std.unicode.fmtUtf16Le(slice)});
-
-    var pngBuf: [1024 * 100 * 1]u8 = undefined;
-    const a = try mywic_factory.png(atlasPngU16, &pngBuf);
-    std.debug.print("\n{d}\n", .{a.len});
-
-    const atlas_width = 160;
-    const atlas_height = 160;
-    const pixel_buffer = pngBuf;
 
     // this seems somewhat related to scaling the window
     _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -168,8 +144,10 @@ pub fn main(init: std.process.Init) !void {
     if (hwnd) |hwndV| {
         _ = ShowWindow(hwndV, SW_SHOW);
 
-        const context: MyDirectXContext = try .init(hwndV, atlas_width, atlas_height, &pixel_buffer);
-        var platform: MyPlatform = .init(context);
+        var context: MyDirectXContext = try .init(hwndV);
+        const resources: MyTextureResources = try .init(io, arena, &context);
+
+        var platform: MyPlatform = .init(context, resources);
         defer platform.deinit();
 
         _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(&platform)));
@@ -383,8 +361,6 @@ const MyDirectXContext = struct {
 
     game_srv: *ID3D11ShaderResourceView,
 
-    atlas_srv: *ID3D11ShaderResourceView,
-
     sampler: *ID3D11SamplerState,
 
     rasterizer_state: *ID3D11RasterizerState,
@@ -392,8 +368,6 @@ const MyDirectXContext = struct {
     hwnd: HWND,
 
     game_viewport: D3D11_VIEWPORT,
-
-    atlas_tex_desc: D3D11_TEXTURE2D_DESC,
 
     is_fullscreen: bool = false,
     windowed_style: u32 = 0, // WS_OVERLAPPEDWINDOW etc,
@@ -407,8 +381,6 @@ const MyDirectXContext = struct {
         _ = self.game_rtv.IUnknown.Release();
 
         _ = self.game_srv.IUnknown.Release();
-
-        _ = self.atlas_srv.IUnknown.Release();
 
         _ = self.input_layout.IUnknown.Release();
         _ = self.vertex_buffer.IUnknown.Release();
@@ -430,7 +402,7 @@ const MyDirectXContext = struct {
         _ = self.swap_chain.IUnknown.Release();
     }
 
-    fn init(hwnd: HWND, atlas_width: u32, atlas_height: u32, pixel_buffer: []const u8) !MyDirectXContext {
+    fn init(hwnd: HWND) !MyDirectXContext {
         const swap_chain_desc = DXGI_SWAP_CHAIN_DESC{
             .BufferDesc = .{
                 .Width = @intCast(client_width),
@@ -497,30 +469,6 @@ const MyDirectXContext = struct {
             errdefer _ = backbuffer_rtv.IUnknown.Release();
         }
 
-        var atlas_tex_desc = D3D11_TEXTURE2D_DESC{
-            .Width = atlas_width,
-            .Height = atlas_height,
-            .MipLevels = 1,
-            .ArraySize = 1,
-            .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-            .SampleDesc = .{ .Count = 1, .Quality = 0 },
-            .Usage = D3D11_USAGE_DEFAULT,
-            .BindFlags = .{ .SHADER_RESOURCE = 1 },
-            .CPUAccessFlags = .{},
-            .MiscFlags = .{},
-        };
-
-        const atlas_init_data = D3D11_SUBRESOURCE_DATA{
-            .pSysMem = pixel_buffer.ptr,
-            .SysMemPitch = atlas_width * 4,
-            .SysMemSlicePitch = 0,
-        };
-
-        var atlas_tex: *ID3D11Texture2D = undefined;
-        hr = device.CreateTexture2D(&atlas_tex_desc, &atlas_init_data, @ptrCast(&atlas_tex));
-        if (hr != HRESULT.S_OK) return error.CreateAtlasTextureFailed;
-        defer _ = atlas_tex.IUnknown.Release();
-
         // --- Offscreen "game" render target: fixed at game_width x
         // game_height  for the lifetime of the program.
         var game_tex_desc = D3D11_TEXTURE2D_DESC{
@@ -549,11 +497,6 @@ const MyDirectXContext = struct {
         var game_srv: *ID3D11ShaderResourceView = undefined;
         hr = device.CreateShaderResourceView(@ptrCast(game_tex), null, @ptrCast(&game_srv));
         if (hr != HRESULT.S_OK) return error.CreateGameSRVFailed;
-        errdefer _ = game_srv.IUnknown.Release();
-
-        var atlas_srv: *ID3D11ShaderResourceView = undefined;
-        hr = device.CreateShaderResourceView(@ptrCast(atlas_tex), null, @ptrCast(&atlas_srv));
-        if (hr != HRESULT.S_OK) return error.CreateAtlasSRVFailed;
         errdefer _ = game_srv.IUnknown.Release();
 
         const game_viewport = D3D11_VIEWPORT{
@@ -645,13 +588,6 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
         errdefer _ = input_layout.IUnknown.Release();
 
-        //const vertices = [_]Vertex{
-        //    .{ .pos = .{ -1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } }, // top-left
-        //    .{ .pos = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } }, //top-right
-        //    .{ .pos = .{ 1.0, -1.0, 0.0 }, .uv = .{ 1.0, 1.0 } }, //bottom-right
-        //    .{ .pos = .{ -1.0, -1.0, 0.0 }, .uv = .{ 0.0, 1.0 } }, //bottom-left
-        //};
-
         var indices: [MAX_SPRITES_PER_BATCH * 6]u16 = undefined;
         for (0..MAX_SPRITES_PER_BATCH) |i| {
             const v: u16 = @intCast(i * 4);
@@ -669,12 +605,6 @@ const MyDirectXContext = struct {
             .MiscFlags = .{},
             .StructureByteStride = 0,
         };
-
-        //var init_data = D3D11_SUBRESOURCE_DATA{
-        //    .pSysMem = &vertices,
-        //    .SysMemPitch = 0,
-        //    .SysMemSlicePitch = 0,
-        //};
 
         var vertex_buffer: *ID3D11Buffer = undefined;
         hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
@@ -718,8 +648,6 @@ const MyDirectXContext = struct {
         const null_srv: ?*ID3D11ShaderResourceView = null;
 
         return .{
-            .atlas_tex_desc = atlas_tex_desc,
-
             .game_viewport = game_viewport,
             .stride = stride,
             .vb_offset = vb_offset,
@@ -728,7 +656,6 @@ const MyDirectXContext = struct {
             .null_srv = null_srv,
 
             .game_srv = game_srv,
-            .atlas_srv = atlas_srv,
 
             .sampler = sampler,
 
@@ -754,6 +681,39 @@ const MyDirectXContext = struct {
         };
     }
 
+    fn CreateMyTexture(self: *Self, rgbaImage: png.RGBAImage) !MyTexture {
+        var Tex_desc = D3D11_TEXTURE2D_DESC{
+            .Width = rgbaImage.height,
+            .Height = rgbaImage.width,
+            .MipLevels = 1,
+            .ArraySize = 1,
+            .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Usage = D3D11_USAGE_DEFAULT,
+            .BindFlags = .{ .SHADER_RESOURCE = 1 },
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+        };
+
+        const InitData = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = rgbaImage.buf.ptr,
+            .SysMemPitch = rgbaImage.width * 4,
+            .SysMemSlicePitch = 0,
+        };
+
+        var Tex: *ID3D11Texture2D = undefined;
+        var hr = self.device.CreateTexture2D(&Tex_desc, &InitData, @ptrCast(&Tex));
+        if (hr != HRESULT.S_OK) return error.CreateAtlasTextureFailed;
+        defer _ = Tex.IUnknown.Release();
+
+        var Srv: *ID3D11ShaderResourceView = undefined;
+        hr = self.device.CreateShaderResourceView(@ptrCast(Tex), null, @ptrCast(&Srv));
+        if (hr != HRESULT.S_OK) return error.CreateAtlasSRVFailed;
+        errdefer _ = Srv.IUnknown.Release();
+
+        return .{ .Width = rgbaImage.width, .Height = rgbaImage.height, .Srv = Srv };
+    }
+
     fn beginPass1(self: *Self) void {
         // --- Pass 1: render the world into the fixed-size game target ---
         var raw_rtvs = [_]?*ID3D11RenderTargetView{self.game_rtv};
@@ -774,10 +734,6 @@ const MyDirectXContext = struct {
         self.context.PSSetShader(self.pixel_shader, null, 0);
 
         self.context.IASetIndexBuffer(self.index_buffer, DXGI_FORMAT_R16_UINT, 0);
-
-        var raw_srv2 = [_]?*ID3D11ShaderResourceView{self.atlas_srv};
-        const atlas_srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv2;
-        self.context.PSSetShaderResources(0, 1, atlas_srvs);
 
         var raw_sampler2 = [_]?*ID3D11SamplerState{self.sampler};
         const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
@@ -804,35 +760,13 @@ const MyDirectXContext = struct {
         const game_w_f: f32 = @floatFromInt(game_width);
         const game_h_f: f32 = @floatFromInt(game_height);
 
-        //const scale_x = @divTrunc(win_w, @as(i32, @intCast(game_width)));
-        //const scale_y = @divTrunc(win_h, @as(i32, @intCast(game_height)));
-        //const scale = @max(1, @min(scale_x, scale_y));
-
         const scale = @min(win_w_f / game_w_f, win_h_f / game_h_f);
 
-        //const out_w = @as(i32, @intCast(game_width)) * scale;
-        //const out_h = @as(i32, @intCast(game_height)) * scale;
         const out_w = game_w_f * scale;
         const out_h = game_h_f * scale;
 
-        //const offset_x = @divTrunc(win_w - out_w, 2);
-        //const offset_y = @divTrunc(win_h - out_h, 2);
-
         const offset_x = (win_w_f - out_w) / 2.0;
         const offset_y = (win_h_f - out_h) / 2.0;
-
-        const Last = struct {
-            var w: i32 = -1;
-            var h: i32 = -1;
-        };
-        if (win_w != Last.w or win_h != Last.h) {
-            Last.w = win_w;
-            Last.h = win_h;
-            std.debug.print(
-                "client={}x{} scale={} out={}x{} offset={},{}\n",
-                .{ win_w, win_h, scale, out_w, out_h, offset_x, offset_y },
-            );
-        }
 
         var blit_viewport = D3D11_VIEWPORT{
             .TopLeftX = offset_x,
@@ -921,39 +855,6 @@ const MyDirectXContext = struct {
         self.is_fullscreen = false;
     }
 
-    fn drawSprite(self: *Self, source_rect: Rect, dest_rect: Rect) void {
-        const atlas_tex_desc = self.atlas_tex_desc;
-
-        // compute u0, v0, u1, v1, and ndc_x0..ndc_y1 as above
-
-        // source rect
-        const _u0 = source_rect.x / @as(f32, @floatFromInt(atlas_tex_desc.Width));
-        const v0 = source_rect.y / @as(f32, @floatFromInt(atlas_tex_desc.Height));
-        const _u1 = (source_rect.x + source_rect.width) / @as(f32, @floatFromInt(atlas_tex_desc.Width));
-        const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(atlas_tex_desc.Height));
-
-        //dest rect
-        const ndc_x0 = (dest_rect.x / game_width) * 2.0 - 1.0;
-        const ndc_y0 = 1.0 - (dest_rect.y / game_height) * 2.0; // y flips
-        const ndc_x1 = ((dest_rect.x + dest_rect.width) / game_width) * 2.0 - 1.0;
-        const ndc_y1 = 1.0 - ((dest_rect.y + dest_rect.height) / game_height) * 2.0;
-
-        const quad_vertices = [_]Vertex{
-            .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
-            .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
-            .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 } }, //bottom-right
-            .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
-        };
-
-        // Map -> write 4 vert -> Unmap
-        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
-        _ = self.context.Map(@ptrCast(self.vertex_buffer), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-        const dst: [*]Vertex = @ptrCast(@alignCast(mapped.pData));
-        @memcpy(dst[0..4], &quad_vertices);
-        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
-        self.context.DrawIndexed(6, 0, 0);
-    }
-
     fn onResize(self: *Self, new_width: u32, new_height: u32) void {
         self.context.OMSetRenderTargets(0, null, null);
 
@@ -1006,7 +907,7 @@ const MyBatchDraw = struct {
     context: *ID3D11DeviceContext,
     vertex_buffer: *ID3D11Buffer,
 
-    current_texture: ?*ID3D11ShaderResourceView = null,
+    current_texture: ?*MyTexture = null,
     sprite_count: u32 = 0,
     mapped: D3D11_MAPPED_SUBRESOURCE = undefined,
 
@@ -1015,6 +916,13 @@ const MyBatchDraw = struct {
     }
 
     const Self = @This();
+
+    fn SetShaderResourceForTexture(self: *Self, texture: MyTexture) void {
+        var raw_srv = [_]?*ID3D11ShaderResourceView{texture.Srv};
+        const srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv;
+        self.context.PSSetShaderResources(0, 1, srvs);
+    }
+
     fn beginBatch(self: *Self) !void {
         const hr = self.context.Map(
             @ptrCast(self.vertex_buffer),
@@ -1032,9 +940,7 @@ const MyBatchDraw = struct {
         if (self.sprite_count == 0) return;
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
 
-        var raw_srv = [_]?*ID3D11ShaderResourceView{self.current_texture};
-        const atlas_srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv;
-        self.context.PSSetShaderResources(0, 1, atlas_srvs);
+        self.SetShaderResourceForTexture(self.current_texture.?.*);
         self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
 
         _ = self.context.Map(
@@ -1048,22 +954,22 @@ const MyBatchDraw = struct {
         self.sprite_count = 0;
     }
 
-    fn drawSprite(self: *Self, srv: *ID3D11ShaderResourceView, textureWidth: u32, textureHeight: u32, source_rect: Rect, dest_rect: Rect) void {
+    fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect) void {
         if (self.sprite_count == MAX_SPRITES_PER_BATCH) {
             self.flush();
         }
-        if (self.current_texture != null and self.current_texture.? != srv) {
+        if (self.current_texture != null and self.current_texture.? != texture) {
             self.flush();
         }
-        self.current_texture = srv;
+        self.current_texture = texture;
 
         const dst: [*]Vertex = @ptrCast(@alignCast(self.mapped.pData));
 
         // source rect
-        const _u0 = source_rect.x / @as(f32, @floatFromInt(textureWidth));
-        const v0 = source_rect.y / @as(f32, @floatFromInt(textureHeight));
-        const _u1 = (source_rect.x + source_rect.width) / @as(f32, @floatFromInt(textureWidth));
-        const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(textureHeight));
+        const _u0 = source_rect.x / @as(f32, @floatFromInt(texture.Width));
+        const v0 = source_rect.y / @as(f32, @floatFromInt(texture.Height));
+        const _u1 = (source_rect.x + source_rect.width) / @as(f32, @floatFromInt(texture.Width));
+        const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(texture.Height));
 
         //dest rect
         const ndc_x0 = (dest_rect.x / game_width) * 2.0 - 1.0;
@@ -1084,17 +990,33 @@ const MyBatchDraw = struct {
     }
 };
 
+const MyTexture = struct {
+    Width: u32,
+    Height: u32,
+    Srv: *ID3D11ShaderResourceView,
+
+    pub fn deinit(self: *MyTexture) void {
+        _ = self.Srv.IUnknown.Release();
+    }
+};
+
 const MyPlatform = struct {
     cx: MyDirectXContext,
     batch: MyBatchDraw,
+    resources: MyTextureResources,
 
     const Self = @This();
     fn deinit(self: *Self) void {
         self.cx.deinit();
+        self.resources.deinit();
     }
 
-    fn init(cx: MyDirectXContext) Self {
-        return .{ .cx = cx, .batch = .init(cx.context, cx.vertex_buffer) };
+    fn init(cx: MyDirectXContext, resources: MyTextureResources) Self {
+        return .{
+            .cx = cx,
+            .batch = .init(cx.context, cx.vertex_buffer),
+            .resources = resources,
+        };
     }
 
     fn beginDraw(self: *Self) void {
@@ -1111,12 +1033,14 @@ const MyPlatform = struct {
         self.beginDraw();
 
         const source_rect = Rect{ .x = 0, .y = 0, .width = 30, .height = 30 };
+
+        self.batch.drawSprite(&self.resources.texBackground, source_rect, .{ .x = 5, .y = 5, .width = 630, .height = 350 });
         for (0..5000) |i| {
             const x: f32 = @floatFromInt(i);
             const xx = @mod(x * 10, 540);
             const yy = @divFloor(x, 540);
             const dest_rect = Rect{ .x = 10 + xx, .y = 100 + yy * 100 + std.math.sin(x * 70) * 30, .width = 10, .height = 10 };
-            self.batch.drawSprite(self.cx.atlas_srv, 160, 160, source_rect, dest_rect);
+            self.batch.drawSprite(&self.resources.texSprites, source_rect, dest_rect);
         }
 
         self.endDraw();
@@ -1144,5 +1068,48 @@ const MyPlatform = struct {
             // update();
             // render();
         }
+    }
+};
+
+const MyTextureResources = struct {
+    texSprites: MyTexture,
+    texBackground: MyTexture,
+
+    const Self = @This();
+
+    fn deinit(self: *Self) void {
+        self.texSprites.deinit();
+        self.texBackground.deinit();
+    }
+
+    fn init(io: std.Io, allocator: Allocator, cx: *MyDirectXContext) !Self {
+        var mywic_factory = try png.MyWicFactory.init();
+        defer mywic_factory.deinit();
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const exePath = try MyAssetsPathLocator.executableDirPath(io, &buf);
+
+        const spritesPngPath = try MyAssetsPathLocator.PngPath(allocator, exePath, "sprites.png");
+        defer allocator.free(spritesPngPath);
+
+        const bgPngPath = try MyAssetsPathLocator.PngPath(allocator, exePath, "background.png");
+        defer allocator.free(bgPngPath);
+
+        const spritesPngU16 = try MyAssetsPathLocator.convertToU16WindowsPath(allocator, spritesPngPath);
+        defer allocator.free(spritesPngU16);
+
+        const bgPngU16 = try MyAssetsPathLocator.convertToU16WindowsPath(allocator, bgPngPath);
+        defer allocator.free(bgPngU16);
+
+        var pngBuf: [1024 * 300 * 1]u8 = undefined;
+        const spritesRGBA = try mywic_factory.png(spritesPngU16, &pngBuf);
+
+        var pngBuf2: [1024 * 100 * 1]u8 = undefined;
+        const bgRGBA = try mywic_factory.png(bgPngU16, &pngBuf2);
+
+        return .{
+            .texSprites = try cx.CreateMyTexture(spritesRGBA),
+            .texBackground = try cx.CreateMyTexture(bgRGBA),
+        };
     }
 };

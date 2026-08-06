@@ -9,15 +9,15 @@ pub const MyAssetsPathLocator = struct {
         return buf[0..len];
     }
 
-    pub fn assetsPath(allocator: Allocator, exe_dir: []u8) ![]u8 {
+    pub fn assetsPath(allocator: Allocator, exe_dir: []const u8) ![]u8 {
         return try std.fs.path.join(allocator, &.{ exe_dir, "assets" });
     }
 
-    pub fn atlasPngPath(allocator: Allocator, exe_dir: []u8) ![]u8 {
-        return try std.fs.path.join(allocator, &.{ exe_dir, "assets", "atlas.png" });
+    pub fn PngPath(allocator: Allocator, exe_dir: []const u8, png_path: []const u8) ![]u8 {
+        return try std.fs.path.join(allocator, &.{ exe_dir, "assets", png_path });
     }
 
-    pub fn convertToU16WindowsPath(allocator: Allocator, path: []u8) ![:0]u16 {
+    pub fn convertToU16WindowsPath(allocator: Allocator, path: []const u8) ![:0]u16 {
         return try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
     }
 };

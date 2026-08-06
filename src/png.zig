@@ -51,7 +51,7 @@ pub const MyWicFactory = struct {
         return .{ .wic_factory = wic_factory };
     }
 
-    pub fn png(self: *MyWicFactory, lpath: [*:0]const u16, pixels: []u8) ![]u8 {
+    pub fn png(self: *MyWicFactory, lpath: [*:0]const u16, pixels: []u8) !RGBAImage {
         var decoder: *IWICBitmapDecoder = undefined;
 
         var hr = self.wic_factory.CreateDecoderFromFilename(
@@ -102,6 +102,8 @@ pub const MyWicFactory = struct {
         );
         if (hr != HRESULT.S_OK) return error.FailedCopyPixels;
 
-        return pixels[0 .. width * height * 4];
+        return .{ .buf = pixels[0 .. width * height * 4], .width = width, .height = height };
     }
 };
+
+pub const RGBAImage = struct { buf: []u8, width: u32, height: u32 };
