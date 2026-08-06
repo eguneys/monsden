@@ -76,7 +76,7 @@ pub const GameManager = struct {
 
     pub fn render(self: *Self, alpha: f32) void {
         self.platform.beginDraw();
-        scn.renderScene(self.platform.spriteBatch(), self.scene, alpha);
+        scn.renderScene(self.platform.spriteBatch(), &self.scene, alpha);
         self.platform.endDraw();
     }
 };

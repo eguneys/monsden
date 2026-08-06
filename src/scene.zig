@@ -15,10 +15,25 @@ pub const Scene = struct {
     }
 };
 
-pub fn renderScene(batch: SpriteBatch, scene: Scene, alpha: f32) void {
+pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
     _ = alpha;
     batch.draw_bg(0, 0, 64, 64, 5, 5, 10, 10);
+    batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
+    scene.animation.dest.x = 0;
+    scene.animation.dest.y = 0;
     anim.renderFramesAnimation(batch, &scene.animation);
+    {
+        const i = 1;
+        scene.animation.dest.x = @floatFromInt(i % 30 * 30);
+        scene.animation.dest.y = @floatFromInt(i / 30 * 30);
+        anim.renderFramesAnimation(batch, &scene.animation);
+    }
+
+    //for (0..1000) |i| {
+    //    scene.animation.dest.x = @floatFromInt(i % 30 * 30);
+    //    scene.animation.dest.y = @floatFromInt(i / 30 * 30);
+    //    //anim.renderFramesAnimation(batch, &scene.animation);
+    //}
 }
 
 pub fn updateScene(scene: *Scene, dt: f64) void {

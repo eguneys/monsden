@@ -964,6 +964,12 @@ pub const MyBatchDraw = struct {
         self.context.PSSetShaderResources(0, 1, @ptrCast(&raw_srv));
     }
 
+    fn endBatch(self: *Self) !void {
+        try self.flush();
+
+        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+    }
+
     fn beginBatch(self: *Self) !void {
         const hr = self.context.Map(
             @ptrCast(self.vertex_buffer),
@@ -1021,6 +1027,17 @@ pub const MyBatchDraw = struct {
         const ndc_x1 = ((dest_rect.x + dest_rect.width) / game_width) * 2.0 - 1.0;
         const ndc_y1 = 1.0 - ((dest_rect.y + dest_rect.height) / game_height) * 2.0;
 
+        //const Last = struct {
+        //    var x: f32 = -1;
+        //    var y: f32 = -1;
+        //};
+
+        //if (Last.x != source_rect.y or Last.y != source_rect.height) {
+        //    Last.x = source_rect.y;
+        //    Last.y = source_rect.height;
+        //    std.debug.print("{d} {d} {d}\n", .{ source_rect.y, source_rect.height, texture.Width });
+        //}
+
         const quad_vertices = [_]Vertex{
             .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
             .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
@@ -1074,7 +1091,7 @@ pub const MyPlatform = struct {
     }
 
     pub fn endDraw(self: *Self) void {
-        self.batch.flush() catch unreachable;
+        self.batch.endBatch() catch unreachable;
         self.cx.drawPass2();
     }
 
