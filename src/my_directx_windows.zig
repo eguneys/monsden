@@ -964,7 +964,6 @@ pub const MyBatchDraw = struct {
     const Self = @This();
 
     fn SetShaderResourceForTexture(self: *Self, texture: *MyTexture) void {
-        std.debug.print("set shader resource {*}", .{texture});
         var raw_srv = [_]?*ID3D11ShaderResourceView{texture.Srv};
         self.context.PSSetShaderResources(0, 1, @ptrCast(&raw_srv));
     }
@@ -987,7 +986,6 @@ pub const MyBatchDraw = struct {
 
         self.SetShaderResourceForTexture(self.current_texture.?);
 
-        std.debug.print("current {*}\n", .{self.current_texture.?});
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
 
         self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
@@ -1005,14 +1003,12 @@ pub const MyBatchDraw = struct {
     }
 
     pub fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect) !void {
-        std.debug.print("draw sprite{*}\n", .{texture});
         if (self.sprite_count == MAX_SPRITES_PER_BATCH) {
             try self.flush();
         }
         if (self.current_texture != null and self.current_texture.? != texture) {
             try self.flush();
         }
-        std.debug.print("texture {*}\n", .{texture});
         self.current_texture = texture;
 
         const dst: [*]Vertex = @ptrCast(@alignCast(self.mapped.pData));
@@ -1035,13 +1031,6 @@ pub const MyBatchDraw = struct {
             .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 } }, //bottom-right
             .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
         };
-
-        const first = self.sprite_count * 4;
-        const last = first + 4;
-
-        std.debug.assert(last <= MAX_SPRITES_PER_BATCH * 4);
-
-        std.debug.print("{}..{}\n", .{ first, last });
 
         const base = self.sprite_count * 4;
 
