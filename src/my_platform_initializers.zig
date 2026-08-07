@@ -1,3 +1,4 @@
+const Input = @import("input.zig");
 const Camera = @import("camera.zig");
 const math = @import("math.zig");
 const Rect = math.Rect;
@@ -5,6 +6,7 @@ const Rect = math.Rect;
 const DebugBatch = @import("draw_spr.zig").DebugBatch;
 const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
 const GamePlatform = @import("loop.zig").GamePlatform;
+const KeyboardState = @import("loop.zig").KeyboardState;
 
 const MyPlatform = @import("my_directx_windows.zig").MyPlatform;
 
@@ -155,6 +157,33 @@ pub const MyGamePlatform = struct {
         self.platform.batch.endBatch() catch unreachable;
     }
 
+    fn onKeyboardSnapshotImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.keyboard.snapshot();
+    }
+
+    fn onKeyDownImpl(ctx: *anyopaque, vk: usize) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.keyboard.current[vk] = true;
+    }
+
+    fn onKeyUpImpl(ctx: *anyopaque, vk: usize) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.keyboard.current[vk] = false;
+    }
+    fn onKillFocusImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.keyboard.killFocus();
+    }
+    fn addInputMappingsImpl(ctx: *const anyopaque, input: *Input) void {
+        _ = ctx;
+        MyAddInputMappings(input);
+    }
+    fn keyboardStateImpl(ctx: *anyopaque) *KeyboardState {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.platform.keyboard;
+    }
+
     const vtable = GamePlatform.VTable{
         .peekMessages = peekMessagesImpl,
         .toggleFullscreen = toggleFullscreenImpl,
@@ -168,6 +197,14 @@ pub const MyGamePlatform = struct {
         .endDebugDraw = endDebugDrawImpl,
         .beginSpriteDraw = beginSpriteDrawImpl,
         .endSpriteDraw = endSpriteDrawImpl,
+
+        .onKeyboardSnapshot = onKeyboardSnapshotImpl,
+        .onKeyDown = onKeyDownImpl,
+        .onKeyUp = onKeyUpImpl,
+        .onKillFocus = onKillFocusImpl,
+
+        .addInputMappings = addInputMappingsImpl,
+        .keyboardState = keyboardStateImpl,
     };
 
     pub fn getPlatform(self: *MyGamePlatform) GamePlatform {
@@ -177,3 +214,20 @@ pub const MyGamePlatform = struct {
         };
     }
 };
+
+const win32 = @import("win32/zigwin32/win32.zig");
+
+const VK_W = win32.ui.input.keyboard_and_mouse.VK_W;
+const VK_A = win32.ui.input.keyboard_and_mouse.VK_A;
+const VK_S = win32.ui.input.keyboard_and_mouse.VK_S;
+const VK_D = win32.ui.input.keyboard_and_mouse.VK_D;
+const VK_J = win32.ui.input.keyboard_and_mouse.VK_J;
+const VK_I = win32.ui.input.keyboard_and_mouse.VK_I;
+const VK_Q = win32.ui.input.keyboard_and_mouse.VK_Q;
+
+fn MyAddInputMappings(input: *Input) void {
+    input.add_keymapping(@intFromEnum(VK_A), Input.Action.Run_Left);
+    input.add_keymapping(@intFromEnum(VK_D), Input.Action.Run_Right);
+    input.add_keymapping(@intFromEnum(VK_J), Input.Action.Jump_Up);
+    input.add_keymapping(@intFromEnum(VK_Q), Input.Action.Quit);
+}

@@ -45,7 +45,7 @@ pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
 pub fn updateScene(scene: *Scene, dt: f64) void {
     scene.t += @floatCast(dt);
     anim.updateFramesAnimation(&scene.animation, dt);
-    //scene.camera.position[0] = @sin(scene.t) * 200;
+    scene.camera.position[0] = @sin(scene.t) * 200;
     //scene.camera.zoom = @sin(scene.t) * 0.5;
 }
 

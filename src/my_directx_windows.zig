@@ -5,7 +5,9 @@ const Io = std.Io;
 const loop = @import("loop.zig");
 const GameManager = loop.GameManager;
 const GameLoop = loop.GameLoop;
+const KeyboardState = loop.KeyboardState;
 
+const Input = @import("input.zig");
 const Camera = @import("camera.zig");
 
 const MySpriteBatch = @import("my_platform_initializers.zig").MySpriteBatch;
@@ -64,6 +66,9 @@ const GWLP_USERDATA = win32.ui.windows_and_messaging.GWLP_USERDATA;
 const WM_SIZE = win32.ui.windows_and_messaging.WM_SIZE;
 
 const WM_SYSKEYDOWN = win32.ui.windows_and_messaging.WM_SYSKEYDOWN;
+const WM_KEYDOWN = win32.ui.windows_and_messaging.WM_KEYDOWN;
+const WM_KEYUP = win32.ui.windows_and_messaging.WM_KEYUP;
+const WM_KILLFOCUS = win32.ui.windows_and_messaging.WM_KILLFOCUS;
 
 const GWL_STYLE = win32.ui.windows_and_messaging.GWL_STYLE;
 
@@ -143,7 +148,14 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         var batch: MyBatchDraw = try .init(context.device, context.context);
         var debug: MyDebugDraw = try .init(context.device, context.context);
 
-        const platform: MyPlatform = .init(&context, &batch, &debug, resources);
+        var keyboard: KeyboardState = .init();
+        const platform: MyPlatform = .init(
+            &context,
+            &batch,
+            &debug,
+            resources,
+            &keyboard,
+        );
 
         var mgp: MyGamePlatform = .init(platform);
 
@@ -212,6 +224,36 @@ fn processWindowMessage(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) ca
             }
 
             return DefWindowProcA(hwnd, msg, wParam, lParam);
+        },
+        WM_KEYDOWN => {
+            const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            if (user_data == 0) return 0;
+            const state: *GameManager = @ptrFromInt(@as(usize, @bitCast(user_data)));
+
+            const vk: usize = @intCast(wParam);
+            const was_down = (lParam & (1 << 30)) != 0;
+            if (!was_down) {
+                // this is the actual "just went down" transition, not a repeat
+                state.platform.onKeyboardDown(vk);
+            }
+            return 0;
+        },
+        WM_KEYUP => {
+            const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            if (user_data == 0) return 0;
+            const state: *GameManager = @ptrFromInt(@as(usize, @bitCast(user_data)));
+
+            const vk: usize = @intCast(wParam);
+            state.platform.onKeyboardUp(vk);
+            return 0;
+        },
+        WM_KILLFOCUS => {
+            const user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            if (user_data == 0) return 0;
+            const state: *GameManager = @ptrFromInt(@as(usize, @bitCast(user_data)));
+
+            state.platform.onKillFocus();
+            return 0;
         },
         WM_SIZE => {
             const SIZE_MINIMIZED: usize = 1;
@@ -1315,6 +1357,8 @@ pub const MyPlatform = struct {
 
     debug: *MyDebugDraw,
 
+    keyboard: *KeyboardState,
+
     const Self = @This();
     pub fn deinit(self: *Self) void {
         self.cx.deinit();
@@ -1322,12 +1366,13 @@ pub const MyPlatform = struct {
         self.debug.deinit();
     }
 
-    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, resources: MyTextureResources) Self {
+    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, resources: MyTextureResources, keyboard: *KeyboardState) Self {
         return .{
             .cx = cx,
             .batch = batch,
             .resources = resources,
             .debug = debug,
+            .keyboard = keyboard,
         };
     }
 

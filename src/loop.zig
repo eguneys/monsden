@@ -3,9 +3,38 @@ const Io = std.Io;
 
 const Camera = @import("camera.zig");
 
+const Input = @import("input.zig");
+
 const scn = @import("scene.zig");
 const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
 const DebugBatch = @import("draw_spr.zig").DebugBatch;
+
+pub const KeyboardState = struct {
+    current: [256]bool = [_]bool{false} ** 256,
+    previous: [256]bool = [_]bool{false} ** 256,
+
+    pub fn init() KeyboardState {
+        return .{};
+    }
+
+    pub fn snapshot(self: *KeyboardState) void {
+        self.previous = self.current;
+    }
+
+    pub fn killFocus(self: *KeyboardState) void {
+        self.current = [_]bool{false} ** 256;
+    }
+
+    pub fn justPressed(self: *const KeyboardState, vk: usize) bool {
+        return self.current[vk] and !self.previous[vk];
+    }
+    pub fn justReleased(self: *const KeyboardState, vk: usize) bool {
+        return !self.current[vk] and self.previous[vk];
+    }
+    pub fn isHeld(self: *const KeyboardState, vk: usize) bool {
+        return self.current[vk];
+    }
+};
 
 pub const GamePlatform = struct {
     ptr: *anyopaque,
@@ -26,6 +55,14 @@ pub const GamePlatform = struct {
 
         beginSpriteDraw: *const fn (ctx: *anyopaque) void,
         endSpriteDraw: *const fn (ctx: *anyopaque) void,
+
+        onKeyboardSnapshot: *const fn (ctx: *anyopaque) void,
+        onKeyDown: *const fn (ctx: *anyopaque, vk: usize) void,
+        onKeyUp: *const fn (ctx: *anyopaque, vk: usize) void,
+        onKillFocus: *const fn (ctx: *anyopaque) void,
+
+        addInputMappings: *const fn (ctx: *const anyopaque, input: *Input) void,
+        keyboardState: *const fn (ctx: *anyopaque) *KeyboardState,
     };
 
     pub fn deinit(self: *Self) void {
@@ -34,6 +71,7 @@ pub const GamePlatform = struct {
 
     const Self = @This();
     pub fn update(self: *Self) bool {
+        self.vtable.onKeyboardSnapshot(self.ptr);
         const shouldQuit = self.vtable.peekMessages(self.ptr);
 
         return shouldQuit;
@@ -78,11 +116,35 @@ pub const GamePlatform = struct {
     pub fn onResize(self: *Self, new_width: u32, new_height: u32) void {
         self.vtable.onResize(self.ptr, new_width, new_height);
     }
+
+    pub fn onKeyboardSnapshot(self: *Self) void {
+        self.vtable.onKeyboardSnapshot(self.ptr);
+    }
+    pub fn onKeyboardDown(self: *Self, vk: usize) void {
+        self.vtable.onKeyDown(self.ptr, vk);
+    }
+
+    pub fn onKeyboardUp(self: *Self, vk: usize) void {
+        self.vtable.onKeyUp(self.ptr, vk);
+    }
+
+    pub fn onKillFocus(self: *Self) void {
+        self.vtable.onKillFocus(self.ptr);
+    }
+
+    pub fn addInputMappings(self: *const Self, input: *Input) void {
+        self.vtable.addInputMappings(self.ptr, input);
+    }
+
+    pub fn keyboardState(self: *Self) *KeyboardState {
+        return self.vtable.keyboardState(self.ptr);
+    }
 };
 
 pub const GameManager = struct {
     platform: GamePlatform,
     scene: scn.Scene,
+    input: Input,
 
     const Self = @This();
 
@@ -92,12 +154,24 @@ pub const GameManager = struct {
     }
 
     pub fn init(platform: GamePlatform) Self {
-        return .{ .platform = platform, .scene = .init() };
+        var input: Input = .{};
+        platform.addInputMappings(&input);
+        return .{
+            .platform = platform,
+            .scene = .init(),
+            .input = input,
+        };
     }
 
     pub fn update(self: *Self, dt: f64) bool {
         const shouldQuit = self.platform.update();
         if (shouldQuit) {
+            return true;
+        }
+
+        self.input.SyncWithKeyboardState(self.platform.keyboardState());
+
+        if (self.input.is_just_down(Input.Action.Quit)) {
             return true;
         }
         scn.updateScene(&self.scene, dt);
