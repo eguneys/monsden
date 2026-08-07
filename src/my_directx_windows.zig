@@ -140,7 +140,7 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
 
         var context: MyDirectXContext = try .init(hwndV);
         const resources: MyTextureResources = try .init(io, allocator, &context);
-        var batch: MyBatchDraw = .init(context.context, context.vertex_buffer);
+        var batch: MyBatchDraw = try .init(context.device, context.context);
         var debug: MyDebugDraw = try .init(context.device, context.context);
 
         const platform: MyPlatform = .init(&context, &batch, &debug, resources);
@@ -354,41 +354,27 @@ const MAX_SPRITES_PER_BATCH = 500;
 
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
-
     game_rtv: *ID3D11RenderTargetView,
 
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     swap_chain: *IDXGISwapChain,
 
-    input_layout: *ID3D11InputLayout,
-    vertex_buffer: *ID3D11Buffer,
-
-    index_buffer: *ID3D11Buffer,
-
-    vertex_shader: *ID3D11VertexShader,
-    pixel_shader: *ID3D11PixelShader,
-
     blit_vertex_shader: *ID3D11VertexShader,
     blit_pixel_shader: *ID3D11PixelShader,
 
-    stride: u32,
-    vb_offset: u32,
-    world_clear_color: [4]f32,
     letterbox_color: [4]f32,
-    null_srv: ?*ID3D11ShaderResourceView,
 
+    null_srv: ?*ID3D11ShaderResourceView,
     game_srv: *ID3D11ShaderResourceView,
 
     sampler: *ID3D11SamplerState,
 
-    rasterizer_state: *ID3D11RasterizerState,
-
-    blend_state: *ID3D11BlendState,
-
     hwnd: HWND,
 
     game_viewport: D3D11_VIEWPORT,
+
+    world_clear_color: [4]f32,
 
     is_fullscreen: bool = false,
     windowed_style: u32 = 0, // WS_OVERLAPPEDWINDOW etc,
@@ -399,23 +385,12 @@ const MyDirectXContext = struct {
         self.context.ClearState();
 
         _ = self.sampler.IUnknown.Release();
+
         _ = self.game_rtv.IUnknown.Release();
-
         _ = self.game_srv.IUnknown.Release();
-
-        _ = self.input_layout.IUnknown.Release();
-        _ = self.vertex_buffer.IUnknown.Release();
-        _ = self.index_buffer.IUnknown.Release();
-
-        _ = self.vertex_shader.IUnknown.Release();
-        _ = self.pixel_shader.IUnknown.Release();
 
         _ = self.blit_vertex_shader.IUnknown.Release();
         _ = self.blit_pixel_shader.IUnknown.Release();
-
-        _ = self.rasterizer_state.IUnknown.Release();
-
-        _ = self.blend_state.IUnknown.Release();
 
         if (self.backbuffer_rtv) |backbuffer_rtv|
             _ = backbuffer_rtv.IUnknown.Release();
@@ -479,7 +454,6 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.D3D11DeviceCreationFailed;
 
         // --- Backbuffer render target view (recreated on every WM_SIZE) ---
-
         var back_buffer: *ID3D11Texture2D = undefined;
         var backbuffer_rtv: *ID3D11RenderTargetView = undefined;
         {
@@ -549,132 +523,6 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateSamplerFailed;
         errdefer _ = sampler.IUnknown.Release();
 
-        var rasterizer_desc = D3D11_RASTERIZER_DESC{
-            .FillMode = D3D11_FILL_SOLID,
-            .CullMode = D3D11_CULL_NONE,
-            .DepthClipEnable = TRUE,
-            .AntialiasedLineEnable = FALSE,
-            .DepthBias = FALSE,
-            .DepthBiasClamp = FALSE,
-            .FrontCounterClockwise = FALSE,
-            .MultisampleEnable = FALSE,
-            .ScissorEnable = FALSE,
-            .SlopeScaledDepthBias = FALSE,
-        };
-
-        var rasterizer_state: *ID3D11RasterizerState = undefined;
-        hr = device.CreateRasterizerState(&rasterizer_desc, @ptrCast(&rasterizer_state));
-        if (hr != HRESULT.S_OK) return error.CreateRasterizerStateFailed;
-        errdefer _ = rasterizer_state.IUnknown.Release();
-
-        var blend_desc = D3D11_BLEND_DESC{
-            .AlphaToCoverageEnable = FALSE,
-            .IndependentBlendEnable = FALSE,
-            .RenderTarget = undefined,
-        };
-
-        blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC{
-            .BlendEnable = TRUE,
-            .SrcBlend = D3D11_BLEND_SRC_ALPHA,
-            .DestBlend = D3D11_BLEND_INV_SRC_ALPHA,
-            .BlendOp = D3D11_BLEND_OP_ADD,
-            .SrcBlendAlpha = D3D11_BLEND_ONE,
-            .DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA,
-            .BlendOpAlpha = D3D11_BLEND_OP_ADD,
-            .RenderTargetWriteMask = @intFromEnum(D3D11_COLOR_WRITE_ENABLE_ALL),
-        };
-
-        var blend_state: *ID3D11BlendState = undefined;
-        hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
-        if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
-        errdefer _ = blend_state.IUnknown.Release();
-
-        // Shader additions
-
-        var vertex_shader: *ID3D11VertexShader = undefined;
-        hr = device.CreateVertexShader(vs_bytecode, vs_bytecode.len, null, @ptrCast(&vertex_shader));
-        if (hr != HRESULT.S_OK) return error.CreateVertexShaderFailed;
-        errdefer _ = vertex_shader.IUnknown.Release();
-
-        var pixel_shader: *ID3D11PixelShader = undefined;
-        hr = device.CreatePixelShader(ps_bytecode, ps_bytecode.len, null, @ptrCast(&pixel_shader));
-        if (hr != HRESULT.S_OK) return error.CreatePixelShaderFailed;
-        errdefer _ = pixel_shader.IUnknown.Release();
-
-        const input_element_descs = [_]D3D11_INPUT_ELEMENT_DESC{
-            .{
-                .SemanticName = "POSITION",
-                .SemanticIndex = 0,
-                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
-                .InputSlot = 0,
-                .AlignedByteOffset = 0,
-                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0,
-            },
-            .{
-                .SemanticName = "TEXCOORD",
-                .SemanticIndex = 0,
-                .Format = DXGI_FORMAT_R32G32_FLOAT,
-                .InputSlot = 0,
-                .AlignedByteOffset = 12, // 3 floats * 4 bytes = offset past pos
-                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0,
-            },
-        };
-
-        var input_layout: *ID3D11InputLayout = undefined;
-        hr = device.CreateInputLayout(
-            &input_element_descs,
-            input_element_descs.len,
-            vs_bytecode,
-            vs_bytecode.len,
-            @ptrCast(&input_layout),
-        );
-        if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
-        errdefer _ = input_layout.IUnknown.Release();
-
-        var indices: [MAX_SPRITES_PER_BATCH * 6]u16 = undefined;
-        for (0..MAX_SPRITES_PER_BATCH) |i| {
-            const v: u16 = @intCast(i * 4);
-            const base = i * 6;
-            indices[base..][0..6].* = .{ v + 0, v + 1, v + 2, v + 0, v + 2, v + 3 };
-        }
-
-        var buffer_desc = D3D11_BUFFER_DESC{
-            .ByteWidth = @sizeOf(Vertex) * 4 * MAX_SPRITES_PER_BATCH,
-            //.ByteWidth = @sizeOf(@TypeOf(vertices)),
-            //.Usage = D3D11_USAGE_IMMUTABLE,
-            .Usage = D3D11_USAGE_DYNAMIC,
-            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
-            .CPUAccessFlags = .{ .WRITE = 1 },
-            .MiscFlags = .{},
-            .StructureByteStride = 0,
-        };
-
-        var vertex_buffer: *ID3D11Buffer = undefined;
-        hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
-        if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
-        errdefer _ = vertex_buffer.IUnknown.Release();
-
-        var index_buf_desc = D3D11_BUFFER_DESC{
-            .ByteWidth = @sizeOf(@TypeOf(indices)),
-            .Usage = D3D11_USAGE_IMMUTABLE,
-            .BindFlags = D3D11_BIND_INDEX_BUFFER,
-            .CPUAccessFlags = .{},
-            .MiscFlags = .{},
-            .StructureByteStride = 0,
-        };
-        var ib_init = D3D11_SUBRESOURCE_DATA{
-            .pSysMem = &indices,
-            .SysMemPitch = 0,
-            .SysMemSlicePitch = 0,
-        };
-
-        var index_buffer: *ID3D11Buffer = undefined;
-        hr = device.CreateBuffer(&index_buf_desc, &ib_init, @ptrCast(&index_buffer));
-        if (hr != HRESULT.S_OK) return error.CreateIndexBufferFailed;
-        errdefer _ = index_buffer.IUnknown.Release();
-
         // --- Blit Shaders (fullscreen triangle, no vertex buffer needed) ---
         var blit_vertex_shader: *ID3D11VertexShader = undefined;
         hr = device.CreateVertexShader(blit_vs_bytecode, blit_vs_bytecode.len, null, @ptrCast(&blit_vertex_shader));
@@ -686,37 +534,26 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateBlitPixelShaderFailed;
         errdefer _ = blit_pixel_shader.IUnknown.Release();
 
-        const stride: u32 = @sizeOf(Vertex);
-        const vb_offset: u32 = 0;
-        const world_clear_color = [4]f32{ 0.10, 0.10, 0.35, 1.0 }; // dark blue
         const letterbox_color = [4]f32{ 0.0, 0.0, 0.0, 1.0 }; // black bars
         const null_srv: ?*ID3D11ShaderResourceView = null;
 
+        const world_clear_color = [4]f32{ 0.10, 0.10, 0.35, 1.0 }; // dark blue
+
         return .{
             .game_viewport = game_viewport,
-            .stride = stride,
-            .vb_offset = vb_offset,
-            .world_clear_color = world_clear_color,
             .letterbox_color = letterbox_color,
             .null_srv = null_srv,
+
+            .world_clear_color = world_clear_color,
 
             .game_srv = game_srv,
 
             .sampler = sampler,
 
-            .rasterizer_state = rasterizer_state,
-            .blend_state = blend_state,
-
-            .vertex_shader = vertex_shader,
-            .pixel_shader = pixel_shader,
-
             .blit_vertex_shader = blit_vertex_shader,
             .blit_pixel_shader = blit_pixel_shader,
 
             .hwnd = hwnd,
-            .vertex_buffer = vertex_buffer,
-            .index_buffer = index_buffer,
-            .input_layout = input_layout,
 
             .backbuffer_rtv = backbuffer_rtv,
             .game_rtv = game_rtv,
@@ -766,28 +603,11 @@ const MyDirectXContext = struct {
         const rtvs: ?[*]?*ID3D11RenderTargetView = &raw_rtvs;
         self.context.OMSetRenderTargets(1, rtvs, null);
         self.context.RSSetViewports(1, @ptrCast(&self.game_viewport));
-        self.context.RSSetState(self.rasterizer_state);
         self.context.ClearRenderTargetView(self.game_rtv, @ptrCast(&self.world_clear_color[0]));
-
-        self.context.IASetInputLayout(self.input_layout);
-        self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-        const strides = &[_]u32{self.stride};
-        const vb_offsets = &[_]u32{self.vb_offset};
-        self.context.IASetVertexBuffers(0, 1, @ptrCast(&self.vertex_buffer), strides, vb_offsets);
-
-        self.context.VSSetShader(self.vertex_shader, null, 0);
-        self.context.PSSetShader(self.pixel_shader, null, 0);
-
-        self.context.IASetIndexBuffer(self.index_buffer, DXGI_FORMAT_R16_UINT, 0);
 
         var raw_sampler2 = [_]?*ID3D11SamplerState{self.sampler};
         const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
         self.context.PSSetSamplers(0, 1, samplers2);
-
-        const blendFactor: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 };
-        const sampleMask = 0xffffffff;
-        self.context.OMSetBlendState(self.blend_state, @ptrCast(&blendFactor), sampleMask);
     }
 
     fn drawPass2(self: *Self) void {
@@ -839,9 +659,6 @@ const MyDirectXContext = struct {
         const game_srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv;
         self.context.PSSetShaderResources(0, 1, game_srvs);
 
-        var raw_sampler = [_]?*ID3D11SamplerState{self.sampler};
-        const samplers: ?[*]?*ID3D11SamplerState = &raw_sampler;
-        self.context.PSSetSamplers(0, 1, samplers);
         self.context.Draw(3, 0);
 
         // Unbind the SRV so game_tex is free to be used as a render target
@@ -1069,7 +886,13 @@ pub const MyDebugDraw = struct {
 
     fn SetCBuffer(self: Self, camera: Camera) !void {
         var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
-        const hr = self.context.Map(@ptrCast(self.cbuffer), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        const hr = self.context.Map(
+            @ptrCast(self.cbuffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped,
+        );
         if (hr != HRESULT.S_OK) return error.MapFailed;
         const dest: *CameraConstants = @ptrCast(@alignCast(mapped.pData));
         dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(game_width, game_height) };
@@ -1103,14 +926,12 @@ pub const MyDebugDraw = struct {
 
         self.context.IASetInputLayout(self.input_layout);
         self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-        std.debug.print("{d}", .{D3D11_PRIMITIVE_TOPOLOGY_LINELIST});
 
         self.context.VSSetShader(self.debug_vs, null, 0);
         self.context.PSSetShader(self.debug_ps, null, 0);
 
         try self.SetCBuffer(camera);
 
-        std.debug.print("draw vertex_count={}\n", .{self.vertex_count});
         self.context.Draw(self.vertex_count, 0);
 
         self.vertex_count = 0;
@@ -1182,14 +1003,181 @@ const Vertex = extern struct {
 
 pub const MyBatchDraw = struct {
     context: *ID3D11DeviceContext,
+
+    input_layout: *ID3D11InputLayout,
     vertex_buffer: *ID3D11Buffer,
+    index_buffer: *ID3D11Buffer,
+
+    vertex_shader: *ID3D11VertexShader,
+    pixel_shader: *ID3D11PixelShader,
 
     current_texture: ?*MyTexture = null,
     sprite_count: u32 = 0,
     mapped: D3D11_MAPPED_SUBRESOURCE = undefined,
 
-    fn init(context: *ID3D11DeviceContext, vertex_buffer: *ID3D11Buffer) Self {
-        return .{ .context = context, .vertex_buffer = vertex_buffer };
+    rasterizer_state: *ID3D11RasterizerState,
+    blend_state: *ID3D11BlendState,
+
+    stride: u32,
+    vb_offset: u32,
+
+    fn deinit(self: *Self) void {
+        _ = self.input_layout.IUnknown.Release();
+        _ = self.vertex_buffer.IUnknown.Release();
+        _ = self.index_buffer.IUnknown.Release();
+
+        _ = self.vertex_shader.IUnknown.Release();
+        _ = self.pixel_shader.IUnknown.Release();
+
+        _ = self.rasterizer_state.IUnknown.Release();
+        _ = self.blend_state.IUnknown.Release();
+    }
+
+    fn init(device: *ID3D11Device, context: *ID3D11DeviceContext) !Self {
+        var rasterizer_desc = D3D11_RASTERIZER_DESC{
+            .FillMode = D3D11_FILL_SOLID,
+            .CullMode = D3D11_CULL_NONE,
+            .DepthClipEnable = TRUE,
+            .AntialiasedLineEnable = FALSE,
+            .DepthBias = FALSE,
+            .DepthBiasClamp = FALSE,
+            .FrontCounterClockwise = FALSE,
+            .MultisampleEnable = FALSE,
+            .ScissorEnable = FALSE,
+            .SlopeScaledDepthBias = FALSE,
+        };
+
+        var rasterizer_state: *ID3D11RasterizerState = undefined;
+        var hr = device.CreateRasterizerState(&rasterizer_desc, @ptrCast(&rasterizer_state));
+        if (hr != HRESULT.S_OK) return error.CreateRasterizerStateFailed;
+        errdefer _ = rasterizer_state.IUnknown.Release();
+
+        var blend_desc = D3D11_BLEND_DESC{
+            .AlphaToCoverageEnable = FALSE,
+            .IndependentBlendEnable = FALSE,
+            .RenderTarget = undefined,
+        };
+
+        blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC{
+            .BlendEnable = TRUE,
+            .SrcBlend = D3D11_BLEND_SRC_ALPHA,
+            .DestBlend = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOp = D3D11_BLEND_OP_ADD,
+            .SrcBlendAlpha = D3D11_BLEND_ONE,
+            .DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOpAlpha = D3D11_BLEND_OP_ADD,
+            .RenderTargetWriteMask = @intFromEnum(D3D11_COLOR_WRITE_ENABLE_ALL),
+        };
+
+        var blend_state: *ID3D11BlendState = undefined;
+        hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
+        if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
+        errdefer _ = blend_state.IUnknown.Release();
+
+        // Shader additions
+
+        var vertex_shader: *ID3D11VertexShader = undefined;
+        hr = device.CreateVertexShader(vs_bytecode, vs_bytecode.len, null, @ptrCast(&vertex_shader));
+        if (hr != HRESULT.S_OK) return error.CreateVertexShaderFailed;
+        errdefer _ = vertex_shader.IUnknown.Release();
+
+        var pixel_shader: *ID3D11PixelShader = undefined;
+        hr = device.CreatePixelShader(ps_bytecode, ps_bytecode.len, null, @ptrCast(&pixel_shader));
+        if (hr != HRESULT.S_OK) return error.CreatePixelShaderFailed;
+        errdefer _ = pixel_shader.IUnknown.Release();
+
+        const input_element_descs = [_]D3D11_INPUT_ELEMENT_DESC{
+            .{
+                .SemanticName = "POSITION",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 0,
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+            .{
+                .SemanticName = "TEXCOORD",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 12, // 3 floats * 4 bytes = offset past pos
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+        };
+
+        var input_layout: *ID3D11InputLayout = undefined;
+        hr = device.CreateInputLayout(
+            &input_element_descs,
+            input_element_descs.len,
+            vs_bytecode,
+            vs_bytecode.len,
+            @ptrCast(&input_layout),
+        );
+        if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
+        errdefer _ = input_layout.IUnknown.Release();
+
+        var indices: [MAX_SPRITES_PER_BATCH * 6]u16 = undefined;
+        for (0..MAX_SPRITES_PER_BATCH) |i| {
+            const v: u16 = @intCast(i * 4);
+            const base = i * 6;
+            indices[base..][0..6].* = .{ v + 0, v + 1, v + 2, v + 0, v + 2, v + 3 };
+        }
+
+        var buffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(Vertex) * 4 * MAX_SPRITES_PER_BATCH,
+            //.ByteWidth = @sizeOf(@TypeOf(vertices)),
+            //.Usage = D3D11_USAGE_IMMUTABLE,
+            .Usage = D3D11_USAGE_DYNAMIC,
+            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var vertex_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
+        errdefer _ = vertex_buffer.IUnknown.Release();
+
+        var index_buf_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(@TypeOf(indices)),
+            .Usage = D3D11_USAGE_IMMUTABLE,
+            .BindFlags = D3D11_BIND_INDEX_BUFFER,
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+        var ib_init = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = &indices,
+            .SysMemPitch = 0,
+            .SysMemSlicePitch = 0,
+        };
+
+        var index_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&index_buf_desc, &ib_init, @ptrCast(&index_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateIndexBufferFailed;
+        errdefer _ = index_buffer.IUnknown.Release();
+
+        const stride: u32 = @sizeOf(Vertex);
+        const vb_offset: u32 = 0;
+
+        return .{
+            .stride = stride,
+            .vb_offset = vb_offset,
+
+            .context = context,
+            .vertex_buffer = vertex_buffer,
+            .index_buffer = index_buffer,
+
+            .input_layout = input_layout,
+            .vertex_shader = vertex_shader,
+            .pixel_shader = pixel_shader,
+
+            .rasterizer_state = rasterizer_state,
+            .blend_state = blend_state,
+        };
     }
 
     const Self = @This();
@@ -1199,13 +1187,32 @@ pub const MyBatchDraw = struct {
         self.context.PSSetShaderResources(0, 1, @ptrCast(&raw_srv));
     }
 
-    fn endBatch(self: *Self) !void {
+    pub fn endBatch(self: *Self) !void {
         try self.flush();
 
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
     }
 
-    fn beginBatch(self: *Self) !void {
+    pub fn beginBatchSetupState(self: *Self) !void {
+        self.context.RSSetState(self.rasterizer_state);
+        self.context.IASetInputLayout(self.input_layout);
+        self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        const strides = &[_]u32{self.stride};
+        const vb_offsets = &[_]u32{self.vb_offset};
+        self.context.IASetVertexBuffers(0, 1, @ptrCast(&self.vertex_buffer), strides, vb_offsets);
+
+        self.context.VSSetShader(self.vertex_shader, null, 0);
+        self.context.PSSetShader(self.pixel_shader, null, 0);
+
+        self.context.IASetIndexBuffer(self.index_buffer, DXGI_FORMAT_R16_UINT, 0);
+
+        const blendFactor: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 };
+        const sampleMask = 0xffffffff;
+        self.context.OMSetBlendState(self.blend_state, @ptrCast(&blendFactor), sampleMask);
+    }
+
+    pub fn beginBatch(self: *Self) !void {
         const hr = self.context.Map(
             @ptrCast(self.vertex_buffer),
             0,
@@ -1225,7 +1232,6 @@ pub const MyBatchDraw = struct {
 
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
 
-        self.context.OMSetBlendState(null, null, 0xffffffff);
         self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
 
         const hr = self.context.Map(
@@ -1327,11 +1333,9 @@ pub const MyPlatform = struct {
 
     pub fn beginDraw(self: *Self) void {
         self.cx.beginPass1();
-        self.batch.beginBatch() catch unreachable;
     }
 
     pub fn endDraw(self: *Self) void {
-        self.batch.endBatch() catch unreachable;
         self.cx.drawPass2();
     }
 

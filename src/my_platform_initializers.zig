@@ -144,6 +144,17 @@ pub const MyGamePlatform = struct {
         return self.platform.debug.flush(camera) catch unreachable;
     }
 
+    fn beginSpriteDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        self.platform.batch.beginBatchSetupState() catch unreachable;
+        self.platform.batch.beginBatch() catch unreachable;
+    }
+    fn endSpriteDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.batch.endBatch() catch unreachable;
+    }
+
     const vtable = GamePlatform.VTable{
         .peekMessages = peekMessagesImpl,
         .toggleFullscreen = toggleFullscreenImpl,
@@ -155,6 +166,8 @@ pub const MyGamePlatform = struct {
         .debugBatch = debugBatchImpl,
         .beginDebugDraw = beginDebugDrawImpl,
         .endDebugDraw = endDebugDrawImpl,
+        .beginSpriteDraw = beginSpriteDrawImpl,
+        .endSpriteDraw = endSpriteDrawImpl,
     };
 
     pub fn getPlatform(self: *MyGamePlatform) GamePlatform {

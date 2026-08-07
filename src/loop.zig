@@ -23,6 +23,9 @@ pub const GamePlatform = struct {
 
         beginDebugDraw: *const fn (ctx: *anyopaque) void,
         endDebugDraw: *const fn (ctx: *anyopaque, camera: Camera) void,
+
+        beginSpriteDraw: *const fn (ctx: *anyopaque) void,
+        endSpriteDraw: *const fn (ctx: *anyopaque) void,
     };
 
     pub fn deinit(self: *Self) void {
@@ -54,6 +57,14 @@ pub const GamePlatform = struct {
 
     pub fn endDraw(self: *Self) void {
         self.vtable.endDraw(self.ptr);
+    }
+
+    pub fn beginSpriteDraw(self: *Self) void {
+        self.vtable.beginSpriteDraw(self.ptr);
+    }
+
+    pub fn endSpriteDraw(self: *Self) void {
+        self.vtable.endSpriteDraw(self.ptr);
     }
 
     pub fn beginDebugDraw(self: *Self) void {
@@ -95,7 +106,10 @@ pub const GameManager = struct {
 
     pub fn render(self: *Self, alpha: f32) void {
         self.platform.beginDraw();
+
+        self.platform.beginSpriteDraw();
         scn.renderScene(self.platform.spriteBatch(), &self.scene, alpha);
+        self.platform.endSpriteDraw();
 
         self.platform.beginDebugDraw();
         scn.renderDebug(self.platform.debugBatch(), &self.scene);

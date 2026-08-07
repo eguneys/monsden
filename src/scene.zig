@@ -23,7 +23,7 @@ pub const Scene = struct {
 
 pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
     _ = alpha;
-    batch.draw_bg(0, 0, 64, 64, 5, 5, 10, 10);
+    batch.draw_bg(0, 0, 32, 32, 5, 5, 10, 10);
     batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
     scene.animation.dest.x = 0;
     scene.animation.dest.y = 0;
@@ -46,13 +46,20 @@ pub fn updateScene(scene: *Scene, dt: f64) void {
     scene.t += @floatCast(dt);
     anim.updateFramesAnimation(&scene.animation, dt);
     //scene.camera.position[0] = @sin(scene.t) * 200;
+    //scene.camera.zoom = @sin(scene.t) * 0.5;
 }
 
 pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
     _ = scene;
-    debug.draw_line(-150, 150, 160, 170);
-    //debug.draw_circle(0, 0, 10);
-    debug.draw_circle(0, 0, 300 / 2);
+    debug.draw_line(0, 0, 0, 0);
+    for (0..10) |j| {
+        const y: f32 = @floatFromInt(j * 30);
+        debug.draw_line(-150, -50, 160 - y, 170);
+        for (0..10) |i| {
+            const x: f32 = @floatFromInt(i * 30);
+            debug.draw_circle(-100 + x, -100 + y, 10);
+        }
+    }
     //debug.draw_line(0, -100, -360 / 2 + 10, -360 / 2 + 10);
     //debug.draw_line(50, 100, 360 / 2 - 10, 360 / 2 - 10);
 
