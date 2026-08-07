@@ -35,12 +35,12 @@ pub const DebugBatch = struct {
 
     const Self = @This();
     pub fn draw_line(self: Self, x0: f32, y0: f32, x1: f32, y1: f32) void {
-        self.vtable.drawLine(self.ptr, .{ x0, y0 }, .{ x1, y1 }, .{ 0.0, 0.0, 0.0, 1.0 });
+        self.vtable.drawLine(self.ptr, .{ x0, y0 }, .{ x1, y1 }, .{ 0.0, 0.0, 1.0, 1.0 });
     }
     pub fn draw_rect(self: Self, x0: f32, y0: f32, w: f32, h: f32) void {
         self.vtable.drawRect(self.ptr, .{ x0, y0 }, .{ x0 + w, y0 + h }, .{ 0.0, 0.0, 0.0, 1.0 });
     }
     pub fn draw_circle(self: Self, x0: f32, y0: f32, r: f32) void {
-        self.vtable.drawCircle(self.ptr, .{ x0, y0 }, r, .{ 0.0, 0.0, 0.0, 1.0 });
+        self.vtable.drawCircle(self.ptr, .{ x0, y0 }, r, .{ 0.0, 1.0, 0.0, 1.0 });
     }
 };

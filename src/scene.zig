@@ -50,12 +50,12 @@ pub fn updateScene(scene: *Scene, dt: f64) void {
 
 pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
     _ = scene;
-    //debug.draw_line(0, 0, 250, 0);
-    debug.draw_line(100, 100, 250, 100);
-    //debug.draw_line(10, 250, 90, 50);
-    //debug.draw_line(0, 0.3, 0.7, 0.3);
-    //debug.draw_line(0, 0, -10, 20);
-    //debug.draw_rect(0, 0, 50, 70);
+    debug.draw_line(-150, 150, 160, 170);
     //debug.draw_circle(0, 0, 10);
-    //debug.draw_circle(0, 0, 300 / 2);
+    debug.draw_circle(0, 0, 300 / 2);
+    //debug.draw_line(0, -100, -360 / 2 + 10, -360 / 2 + 10);
+    //debug.draw_line(50, 100, 360 / 2 - 10, 360 / 2 - 10);
+
+    //debug.draw_line(-80, -80, 0, 80);
+    //debug.draw_line(-10, 10, 50, 50);
 }

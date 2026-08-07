@@ -350,7 +350,7 @@ const D3D11_MAPPED_SUBRESOURCE = win32.graphics.direct3d11.D3D11_MAPPED_SUBRESOU
 const D3D11_MAP_WRITE_DISCARD = win32.graphics.direct3d11.D3D11_MAP_WRITE_DISCARD;
 const D3D11_MAP_WRITE_NO_OVERWRITE = win32.graphics.direct3d11.D3D11_MAP_WRITE_NO_OVERWRITE;
 
-const MAX_SPRITES_PER_BATCH = 50;
+const MAX_SPRITES_PER_BATCH = 500;
 
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
@@ -1103,12 +1103,14 @@ pub const MyDebugDraw = struct {
 
         self.context.IASetInputLayout(self.input_layout);
         self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        std.debug.print("{d}", .{D3D11_PRIMITIVE_TOPOLOGY_LINELIST});
 
         self.context.VSSetShader(self.debug_vs, null, 0);
         self.context.PSSetShader(self.debug_ps, null, 0);
 
         try self.SetCBuffer(camera);
 
+        std.debug.print("draw vertex_count={}\n", .{self.vertex_count});
         self.context.Draw(self.vertex_count, 0);
 
         self.vertex_count = 0;
@@ -1120,8 +1122,6 @@ pub const MyDebugDraw = struct {
 
         dst[base + 0] = DebugVertex{ .position = p0, .color = color };
         dst[base + 1] = DebugVertex{ .position = p1, .color = color };
-
-        std.debug.print("v0: {} v1: {}\n", .{ dst[base + 0], dst[base + 1] });
 
         self.vertex_count += 2;
     }
@@ -1225,6 +1225,7 @@ pub const MyBatchDraw = struct {
 
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
 
+        self.context.OMSetBlendState(null, null, 0xffffffff);
         self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
 
         const hr = self.context.Map(
