@@ -8,29 +8,21 @@ pub fn init(x: f32, y: f32) Self {
 }
 
 pub fn viewProjectionMatrix(self: Self, viewport_width: f32, viewport_height: f32) [16]f32 {
-    const scale = 1.0 / self.zoom;
+    // world units visible across the viewport at current zoom
+    const view_w = viewport_width / self.zoom;
+    const view_h = viewport_height / self.zoom;
 
-    const aspect = viewport_width / viewport_height;
+    const sx = 2.0 / view_w;
+    const sy = -2.0 / view_h;
 
-    // Create orthographic projection matrix (column-major)
-    // [ 2/(width*scale)    0             0    -translation_x ]
-    // [      0         2/(height*scale)  0    -translation_y ]
-    // [      0             0             1          0        ]
-    // [      0             0             0          1        ]
+    // translate so camera.position is centered in the view
+    const tx = -self.position[0] * sx;
+    const ty = -self.position[1] * sy;
 
-    // width and height of the view in world space
-    const view_w = 2.0 * scale * aspect;
-    const view_h = 2.0 * scale;
-
-    // translate so the camera position is at the center
-    const tx = -self.position[0] / (view_w / 2.0);
-    const ty = -self.position[1] / (view_h / 2.0);
-
-    // column-major matrix
     return [16]f32{
-        2.0 / view_w, 0.0,          0.0, 0.0,
-        0.0,          2.0 / view_h, 0.0, 0.0,
-        0.0,          0.0,          1.0, 0.0,
-        tx,           ty,           0.0, 1.0,
+        sx,  0.0, 0.0, 0.0,
+        0.0, sy,  0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        tx,  ty,  0.0, 1.0,
     };
 }

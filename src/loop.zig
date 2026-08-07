@@ -1,6 +1,8 @@
 const std = @import("std");
 const Io = std.Io;
 
+const Camera = @import("camera.zig");
+
 const scn = @import("scene.zig");
 const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
 const DebugBatch = @import("draw_spr.zig").DebugBatch;
@@ -20,7 +22,7 @@ pub const GamePlatform = struct {
         debugBatch: *const fn (ctx: *anyopaque) DebugBatch,
 
         beginDebugDraw: *const fn (ctx: *anyopaque) void,
-        endDebugDraw: *const fn (ctx: *anyopaque) void,
+        endDebugDraw: *const fn (ctx: *anyopaque, camera: Camera) void,
     };
 
     pub fn deinit(self: *Self) void {
@@ -58,8 +60,8 @@ pub const GamePlatform = struct {
         self.vtable.beginDebugDraw(self.ptr);
     }
 
-    pub fn endDebugDraw(self: *Self) void {
-        self.vtable.endDebugDraw(self.ptr);
+    pub fn endDebugDraw(self: *Self, camera: Camera) void {
+        self.vtable.endDebugDraw(self.ptr, camera);
     }
 
     pub fn onResize(self: *Self, new_width: u32, new_height: u32) void {
@@ -97,7 +99,7 @@ pub const GameManager = struct {
 
         self.platform.beginDebugDraw();
         scn.renderDebug(self.platform.debugBatch(), &self.scene);
-        self.platform.endDebugDraw();
+        self.platform.endDebugDraw(self.scene.camera);
 
         self.platform.endDraw();
     }

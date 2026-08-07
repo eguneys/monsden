@@ -19,8 +19,14 @@ pub const MyDebugBatch = struct {
         self.platform.debug.drawLine(p0, p1, color);
     }
 
+    fn drawRectImpl(ctx: *anyopaque, min: [2]f32, max: [2]f32, color: [4]f32) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.debug.drawRect(min, max, color);
+    }
+
     const vtable = DebugBatch.VTable{
         .drawLine = drawLineImpl,
+        .drawRect = drawRectImpl,
     };
 
     pub fn debugBatch(self: *Self) DebugBatch {
@@ -66,8 +72,6 @@ pub const MyGamePlatform = struct {
     batch: MySpriteBatch,
     debug: MyDebugBatch,
 
-    camera: Camera,
-
     pub fn deinit(self: *Self) void {
         self.platform.deinit();
         self.debug.deinit();
@@ -75,7 +79,6 @@ pub const MyGamePlatform = struct {
 
     pub fn init(platform: MyPlatform) Self {
         return .{
-            .camera = .init(0, 0),
             .platform = platform,
             .batch = .{ .platform = platform },
             .debug = .{ .platform = platform },
@@ -130,10 +133,10 @@ pub const MyGamePlatform = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         return self.platform.debug.beginBatch() catch unreachable;
     }
-    fn endDebugDrawImpl(ctx: *anyopaque) void {
+    fn endDebugDrawImpl(ctx: *anyopaque, camera: Camera) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        return self.platform.debug.flush(self.camera) catch unreachable;
+        return self.platform.debug.flush(camera) catch unreachable;
     }
 
     const vtable = GamePlatform.VTable{

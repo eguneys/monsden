@@ -4,15 +4,20 @@ const DebugBatch = @import("draw_spr.zig").DebugBatch;
 const math = @import("math.zig");
 const anim = @import("anim.zig");
 
+const Camera = @import("camera.zig");
+
 pub const Scene = struct {
     animation: anim.FramesAnimation,
+    camera: Camera,
+
+    t: f32 = 0,
 
     const Self = @This();
     pub fn init() Self {
         const source_rect: math.Box = .init(0, 0, 32, 32);
         const dest_rect: math.Box = .init(0, 0, 64, 64);
         const frames = &[_]u8{ 0, 1, 2, 3, 4 };
-        return .{ .animation = .init(7.2, frames, source_rect, dest_rect) };
+        return .{ .camera = .init(0, 0), .animation = .init(7.2, frames, source_rect, dest_rect) };
     }
 };
 
@@ -38,13 +43,17 @@ pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
 }
 
 pub fn updateScene(scene: *Scene, dt: f64) void {
+    scene.t += @floatCast(dt);
     anim.updateFramesAnimation(&scene.animation, dt);
+    scene.camera.position[0] = @sin(scene.t) * 200;
 }
 
 pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
     _ = scene;
-    debug.draw_line(0, 0, 0.5, 0);
-    debug.draw_line(0.4, 0.5, 0.5, 0.5);
+    debug.draw_line(0, 0, 250, 0);
+    debug.draw_line(0, 100, 250, 100);
+    //debug.draw_line(10, 250, 90, 50);
     //debug.draw_line(0, 0.3, 0.7, 0.3);
     //debug.draw_line(0, 0, -10, 20);
+    //debug.draw_rect(0, 0, 50, 70);
 }

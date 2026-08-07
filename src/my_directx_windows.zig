@@ -1075,8 +1075,6 @@ pub const MyDebugDraw = struct {
         dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(game_width, game_height) };
         self.context.Unmap(@ptrCast(self.cbuffer), 0);
 
-        std.debug.print("{}\n", .{dest.*});
-
         var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
         //const pp_cbuffer: ?[*]?*ID3D11SamplerState = &pp_raw_c_buffer;
         self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
@@ -1127,7 +1125,7 @@ pub const MyDebugDraw = struct {
     }
     pub fn drawRect(self: *Self, min: [2]f32, max: [2]f32, color: [4]f32) void {
         const dst: [*]DebugVertex = @ptrCast(@alignCast(self.mapped.pData));
-        const base = self.sprite_count * 4;
+        const base = self.vertex_count;
 
         const corners = [_][2]f32{
             .{ min[0], min[1] },
@@ -1137,10 +1135,9 @@ pub const MyDebugDraw = struct {
         };
 
         var i: u32 = 0;
-
-        while (i < 5) : (i += 1) {
-            const idx = i % 4;
-            dst[base + i] = DebugVertex{ .position = corners[idx], .color = color };
+        while (i < 4) : (i += 1) {
+            dst[base + i * 2 + 0] = DebugVertex{ .position = corners[i], .color = color };
+            dst[base + i * 2 + 1] = DebugVertex{ .position = corners[(i + 1) % 4], .color = color };
         }
 
         self.vertex_count += 8;
@@ -1148,17 +1145,28 @@ pub const MyDebugDraw = struct {
     pub fn drawCircle(self: *Self, center: [2]f32, radius: f32, color: [4]f32) void {
         const segment_count: u8 = 8;
         const dst: [*]DebugVertex = @ptrCast(@alignCast(self.mapped.pData));
-        const base = self.sprite_count * 4;
+        const base = self.vertex_count;
 
         var i: u32 = 0;
-        while (i <= segment_count) : (i += 1) {
-            const theta = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segment_count)) * std.math.tau;
-            const point = [2]f32{
-                center[0] + radius * @cos(theta),
-                center[1] + radius * @sin(theta),
+        while (i < segment_count) : (i += 1) {
+            const theta0 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segment_count)) * std.math.tau;
+            const theta1 = @as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(segment_count)) * std.math.tau;
+
+            dst[base + i * 2 + 0] = DebugVertex{
+                .position = .{
+                    center[0] + radius * @cos(theta0),
+                    center[1] + radius * @sin(theta0),
+                },
+                .color = color,
             };
 
-            dst[base + i] = DebugVertex{ .position = point, .color = color };
+            dst[base + i * 2 + 1] = DebugVertex{
+                .position = .{
+                    center[0] + radius * @cos(theta1),
+                    center[1] + radius * @sin(theta1),
+                },
+                .color = color,
+            };
         }
 
         self.vertex_count += segment_count * 2;
