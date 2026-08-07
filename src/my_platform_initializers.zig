@@ -23,10 +23,15 @@ pub const MyDebugBatch = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         self.platform.debug.drawRect(min, max, color);
     }
+    fn drawCircleImpl(ctx: *anyopaque, center: [2]f32, radius: f32, color: [4]f32) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.debug.drawCircle(center, radius, color);
+    }
 
     const vtable = DebugBatch.VTable{
         .drawLine = drawLineImpl,
         .drawRect = drawRectImpl,
+        .drawCircle = drawCircleImpl,
     };
 
     pub fn debugBatch(self: *Self) DebugBatch {

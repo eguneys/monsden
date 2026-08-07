@@ -1121,6 +1121,8 @@ pub const MyDebugDraw = struct {
         dst[base + 0] = DebugVertex{ .position = p0, .color = color };
         dst[base + 1] = DebugVertex{ .position = p1, .color = color };
 
+        std.debug.print("v0: {} v1: {}\n", .{ dst[base + 0], dst[base + 1] });
+
         self.vertex_count += 2;
     }
     pub fn drawRect(self: *Self, min: [2]f32, max: [2]f32, color: [4]f32) void {

@@ -45,15 +45,17 @@ pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
 pub fn updateScene(scene: *Scene, dt: f64) void {
     scene.t += @floatCast(dt);
     anim.updateFramesAnimation(&scene.animation, dt);
-    scene.camera.position[0] = @sin(scene.t) * 200;
+    //scene.camera.position[0] = @sin(scene.t) * 200;
 }
 
 pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
     _ = scene;
-    debug.draw_line(0, 0, 250, 0);
-    debug.draw_line(0, 100, 250, 100);
+    //debug.draw_line(0, 0, 250, 0);
+    debug.draw_line(100, 100, 250, 100);
     //debug.draw_line(10, 250, 90, 50);
     //debug.draw_line(0, 0.3, 0.7, 0.3);
     //debug.draw_line(0, 0, -10, 20);
     //debug.draw_rect(0, 0, 50, 70);
+    //debug.draw_circle(0, 0, 10);
+    //debug.draw_circle(0, 0, 300 / 2);
 }
