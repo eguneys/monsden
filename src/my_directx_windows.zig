@@ -6,6 +6,8 @@ const loop = @import("loop.zig");
 const GameManager = loop.GameManager;
 const GameLoop = loop.GameLoop;
 
+const Camera = @import("camera.zig");
+
 const MySpriteBatch = @import("my_platform_initializers.zig").MySpriteBatch;
 const MyGamePlatform = @import("my_platform_initializers.zig").MyGamePlatform;
 
@@ -139,8 +141,9 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         var context: MyDirectXContext = try .init(hwndV);
         const resources: MyTextureResources = try .init(io, allocator, &context);
         var batch: MyBatchDraw = .init(context.context, context.vertex_buffer);
+        var debug: MyDebugDraw = try .init(context.device, context.context);
 
-        const platform: MyPlatform = .init(&context, &batch, resources);
+        const platform: MyPlatform = .init(&context, &batch, &debug, resources);
 
         var mgp: MyGamePlatform = .init(platform);
 
@@ -277,6 +280,9 @@ const ps_bytecode = @embedFile("shaders/triangle_ps.cso");
 const blit_vs_bytecode = @embedFile("shaders/blit_vs.cso");
 const blit_ps_bytecode = @embedFile("shaders/blit_ps.cso");
 
+const debug_vs_bytecode = @embedFile("shaders/debug_vs.cso");
+const debug_ps_bytecode = @embedFile("shaders/debug_ps.cso");
+
 const ID3D11VertexShader = win32.graphics.direct3d11.ID3D11VertexShader;
 const ID3D11PixelShader = win32.graphics.direct3d11.ID3D11PixelShader;
 const D3D11_INPUT_ELEMENT_DESC = win32.graphics.direct3d11.D3D11_INPUT_ELEMENT_DESC;
@@ -285,6 +291,7 @@ const D3D11_BUFFER_DESC = win32.graphics.direct3d11.D3D11_BUFFER_DESC;
 const D3D11_SUBRESOURCE_DATA = win32.graphics.direct3d11.D3D11_SUBRESOURCE_DATA;
 const ID3D11Buffer = win32.graphics.direct3d11.ID3D11Buffer;
 const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST = win32.graphics.direct3d.D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+const D3D11_PRIMITIVE_TOPOLOGY_LINELIST = win32.graphics.direct3d.D3D11_PRIMITIVE_TOPOLOGY_LINELIST;
 
 const D3D11_USAGE_IMMUTABLE = win32.graphics.direct3d11.D3D11_USAGE_IMMUTABLE;
 const D3D11_BIND_VERTEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_VERTEX_BUFFER;
@@ -334,6 +341,8 @@ const DXGI_MWA_NO_ALT_ENTER = win32.graphics.dxgi.DXGI_MWA_NO_ALT_ENTER;
 
 const DXGI_FORMAT_R32G32_FLOAT = win32.graphics.dxgi.common.DXGI_FORMAT_R32G32_FLOAT;
 const DXGI_FORMAT_R16_UINT = win32.graphics.dxgi.common.DXGI_FORMAT_R16_UINT;
+
+const DXGI_FORMAT_R32G32B32A32_FLOAT = win32.graphics.dxgi.common.DXGI_FORMAT_R32G32B32A32_FLOAT;
 
 const D3D11_BIND_INDEX_BUFFER = win32.graphics.direct3d11.D3D11_BIND_INDEX_BUFFER;
 
@@ -940,6 +949,222 @@ const MyDirectXContext = struct {
     }
 };
 
+const CameraConstants = extern struct {
+    view_projection: [16]f32,
+};
+
+const DebugVertex = extern struct {
+    position: [2]f32,
+    color: [4]f32,
+};
+
+pub const MyDebugDraw = struct {
+    context: *ID3D11DeviceContext,
+
+    vertex_buffer: *ID3D11Buffer,
+    cbuffer: *ID3D11Buffer,
+
+    stride: u32 = @sizeOf(DebugVertex),
+    vb_offset: u32 = 0,
+    vertex_count: u32 = 0,
+
+    mapped: D3D11_MAPPED_SUBRESOURCE = undefined,
+
+    debug_vs: *ID3D11VertexShader,
+    debug_ps: *ID3D11PixelShader,
+
+    input_layout: *ID3D11InputLayout,
+
+    fn deinit(self: *Self) void {
+        _ = self.vertex_buffer.IUnknown.Release();
+        _ = self.cbuffer.IUnknown.Release();
+
+        _ = self.debug_vs.IUnknown.Release();
+        _ = self.debug_ps.IUnknown.Release();
+
+        _ = self.input_layout.IUnknown.Release();
+    }
+
+    const Self = @This();
+    fn init(device: *ID3D11Device, context: *ID3D11DeviceContext) !Self {
+        var debug_vertex_shader: *ID3D11VertexShader = undefined;
+        var hr = device.CreateVertexShader(debug_vs_bytecode, debug_vs_bytecode.len, null, @ptrCast(&debug_vertex_shader));
+        if (hr != HRESULT.S_OK) return error.CreateDebugVertexShaderFailed;
+        errdefer _ = debug_vertex_shader.IUnknown.Release();
+
+        var debug_pixel_shader: *ID3D11PixelShader = undefined;
+        hr = device.CreatePixelShader(debug_ps_bytecode, debug_ps_bytecode.len, null, @ptrCast(&debug_pixel_shader));
+        if (hr != HRESULT.S_OK) return error.CreateDebugPixelShaderFailed;
+        errdefer _ = debug_pixel_shader.IUnknown.Release();
+
+        const cbuffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(CameraConstants),
+            .Usage = .DYNAMIC,
+            .BindFlags = .{ .CONSTANT_BUFFER = 1 },
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var cbuffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&cbuffer_desc, null, @ptrCast(&cbuffer));
+        if (hr != HRESULT.S_OK) return error.CreateCBufferFailed;
+        errdefer _ = cbuffer.IUnknown.Release();
+
+        var vertex_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(DebugVertex) * 4 * MAX_SPRITES_PER_BATCH,
+            .Usage = D3D11_USAGE_DYNAMIC,
+            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var vertex_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&vertex_desc, null, @ptrCast(&vertex_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
+        errdefer _ = vertex_buffer.IUnknown.Release();
+
+        const input_element_descs = [_]D3D11_INPUT_ELEMENT_DESC{
+            .{
+                .SemanticName = "POSITION",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 0,
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+            .{
+                .SemanticName = "COLOR",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 8, // 2 floats * 4 bytes = offset past pos
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+        };
+
+        var input_layout: *ID3D11InputLayout = undefined;
+        hr = device.CreateInputLayout(
+            &input_element_descs,
+            input_element_descs.len,
+            debug_vs_bytecode,
+            debug_vs_bytecode.len,
+            @ptrCast(&input_layout),
+        );
+        if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
+        errdefer _ = input_layout.IUnknown.Release();
+
+        return .{
+            .vertex_buffer = vertex_buffer,
+            .cbuffer = cbuffer,
+            .context = context,
+            .debug_vs = debug_vertex_shader,
+            .debug_ps = debug_pixel_shader,
+            .input_layout = input_layout,
+        };
+    }
+
+    fn SetCBuffer(self: Self, camera: Camera) !void {
+        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
+        const hr = self.context.Map(@ptrCast(self.cbuffer), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        const dest: *CameraConstants = @ptrCast(@alignCast(mapped.pData));
+        dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(game_width, game_height) };
+        self.context.Unmap(@ptrCast(self.cbuffer), 0);
+
+        std.debug.print("{}\n", .{dest.*});
+
+        var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
+        //const pp_cbuffer: ?[*]?*ID3D11SamplerState = &pp_raw_c_buffer;
+        self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
+    }
+
+    pub fn beginBatch(self: *Self) !void {
+        const hr = self.context.Map(
+            @ptrCast(self.vertex_buffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &self.mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        self.vertex_count = 0;
+    }
+
+    pub fn flush(self: *Self, camera: Camera) !void {
+        if (self.vertex_count == 0) return;
+
+        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+
+        const strides = &[_]u32{self.stride};
+        const vb_offsets = &[_]u32{self.vb_offset};
+        self.context.IASetVertexBuffers(0, 1, @ptrCast(&self.vertex_buffer), strides, vb_offsets);
+
+        self.context.IASetInputLayout(self.input_layout);
+        self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+
+        self.context.VSSetShader(self.debug_vs, null, 0);
+        self.context.PSSetShader(self.debug_ps, null, 0);
+
+        try self.SetCBuffer(camera);
+
+        self.context.Draw(self.vertex_count, 0);
+
+        self.vertex_count = 0;
+    }
+
+    pub fn drawLine(self: *Self, p0: [2]f32, p1: [2]f32, color: [4]f32) void {
+        const dst: [*]DebugVertex = @ptrCast(@alignCast(self.mapped.pData));
+        const base = self.vertex_count;
+
+        dst[base + 0] = DebugVertex{ .position = p0, .color = color };
+        dst[base + 1] = DebugVertex{ .position = p1, .color = color };
+
+        self.vertex_count += 2;
+    }
+    pub fn drawRect(self: *Self, min: [2]f32, max: [2]f32, color: [4]f32) void {
+        const dst: [*]DebugVertex = @ptrCast(@alignCast(self.mapped.pData));
+        const base = self.sprite_count * 4;
+
+        const corners = [_][2]f32{
+            .{ min[0], min[1] },
+            .{ max[0], min[1] },
+            .{ max[0], max[1] },
+            .{ min[0], max[1] },
+        };
+
+        var i: u32 = 0;
+
+        while (i < 5) : (i += 1) {
+            const idx = i % 4;
+            dst[base + i] = DebugVertex{ .position = corners[idx], .color = color };
+        }
+
+        self.vertex_count += 8;
+    }
+    pub fn drawCircle(self: *Self, center: [2]f32, radius: f32, color: [4]f32) void {
+        const segment_count: u8 = 8;
+        const dst: [*]DebugVertex = @ptrCast(@alignCast(self.mapped.pData));
+        const base = self.sprite_count * 4;
+
+        var i: u32 = 0;
+        while (i <= segment_count) : (i += 1) {
+            const theta = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(segment_count)) * std.math.tau;
+            const point = [2]f32{
+                center[0] + radius * @cos(theta),
+                center[1] + radius * @sin(theta),
+            };
+
+            dst[base + i] = DebugVertex{ .position = point, .color = color };
+        }
+
+        self.vertex_count += segment_count * 2;
+    }
+};
+
 const Vertex = extern struct {
     pos: [3]f32,
     uv: [2]f32,
@@ -1071,17 +1296,21 @@ pub const MyPlatform = struct {
     batch: *MyBatchDraw,
     resources: MyTextureResources,
 
+    debug: *MyDebugDraw,
+
     const Self = @This();
     pub fn deinit(self: *Self) void {
         self.cx.deinit();
         self.resources.deinit();
+        self.debug.deinit();
     }
 
-    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, resources: MyTextureResources) Self {
+    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, resources: MyTextureResources) Self {
         return .{
             .cx = cx,
             .batch = batch,
             .resources = resources,
+            .debug = debug,
         };
     }
 

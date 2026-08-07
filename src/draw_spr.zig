@@ -22,3 +22,17 @@ pub const SpriteBatch = struct {
         self.vtable.drawBg(self.ptr, source_rect, dest_rect);
     }
 };
+
+pub const DebugBatch = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        drawLine: *const fn (ctx: *anyopaque, p0: [2]f32, p1: [2]f32, color: [4]f32) void,
+    };
+
+    const Self = @This();
+    pub fn draw_line(self: Self, x0: f32, y0: f32, x1: f32, y1: f32) void {
+        self.vtable.drawLine(self.ptr, .{ x0, y0 }, .{ x1, y1 }, .{ 0.0, 0.0, 0.0, 1.0 });
+    }
+};

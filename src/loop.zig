@@ -3,6 +3,7 @@ const Io = std.Io;
 
 const scn = @import("scene.zig");
 const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
+const DebugBatch = @import("draw_spr.zig").DebugBatch;
 
 pub const GamePlatform = struct {
     ptr: *anyopaque,
@@ -16,6 +17,10 @@ pub const GamePlatform = struct {
         onResize: *const fn (ctx: *anyopaque, new_width: u32, new_height: u32) void,
         deinit: *const fn (ctx: *anyopaque) void,
         spriteBatch: *const fn (ctx: *anyopaque) SpriteBatch,
+        debugBatch: *const fn (ctx: *anyopaque) DebugBatch,
+
+        beginDebugDraw: *const fn (ctx: *anyopaque) void,
+        endDebugDraw: *const fn (ctx: *anyopaque) void,
     };
 
     pub fn deinit(self: *Self) void {
@@ -27,6 +32,10 @@ pub const GamePlatform = struct {
         const shouldQuit = self.vtable.peekMessages(self.ptr);
 
         return shouldQuit;
+    }
+
+    pub fn debugBatch(self: *Self) DebugBatch {
+        return self.vtable.debugBatch(self.ptr);
     }
 
     pub fn spriteBatch(self: *Self) SpriteBatch {
@@ -43,6 +52,14 @@ pub const GamePlatform = struct {
 
     pub fn endDraw(self: *Self) void {
         self.vtable.endDraw(self.ptr);
+    }
+
+    pub fn beginDebugDraw(self: *Self) void {
+        self.vtable.beginDebugDraw(self.ptr);
+    }
+
+    pub fn endDebugDraw(self: *Self) void {
+        self.vtable.endDebugDraw(self.ptr);
     }
 
     pub fn onResize(self: *Self, new_width: u32, new_height: u32) void {
@@ -77,6 +94,11 @@ pub const GameManager = struct {
     pub fn render(self: *Self, alpha: f32) void {
         self.platform.beginDraw();
         scn.renderScene(self.platform.spriteBatch(), &self.scene, alpha);
+
+        self.platform.beginDebugDraw();
+        scn.renderDebug(self.platform.debugBatch(), &self.scene);
+        self.platform.endDebugDraw();
+
         self.platform.endDraw();
     }
 };

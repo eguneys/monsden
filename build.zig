@@ -46,12 +46,30 @@ pub fn build(b: *std.Build) void {
         shader_dir ++ "/blit.hlsl",
     });
 
+    const compile_debug_vs = b.addSystemCommand(&.{
+        "bin/fxc.exe",               "/nologo",
+        "/T",                        "vs_5_0",
+        "/E",                        "VSMain",
+        "/Fo",                       shader_dir ++ "/debug_vs.cso",
+        shader_dir ++ "/debug.hlsl",
+    });
+
+    const compile_debug_ps = b.addSystemCommand(&.{
+        "bin/fxc.exe",               "/nologo",
+        "/T",                        "ps_5_0",
+        "/E",                        "PSMain",
+        "/Fo",                       shader_dir ++ "/debug_ps.cso",
+        shader_dir ++ "/debug.hlsl",
+    });
+
     //exe.subsystem = .Windows;
 
     exe.step.dependOn(&compile_vs.step);
     exe.step.dependOn(&compile_ps.step);
     exe.step.dependOn(&compile_blit_vs.step);
     exe.step.dependOn(&compile_blit_ps.step);
+    exe.step.dependOn(&compile_debug_vs.step);
+    exe.step.dependOn(&compile_debug_ps.step);
 
     // single file
     //b.installFile("data/opening.pgn", "bin/opening.pgn");

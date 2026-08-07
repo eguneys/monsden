@@ -1,4 +1,5 @@
 const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
+const DebugBatch = @import("draw_spr.zig").DebugBatch;
 
 const math = @import("math.zig");
 const anim = @import("anim.zig");
@@ -38,4 +39,12 @@ pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
 
 pub fn updateScene(scene: *Scene, dt: f64) void {
     anim.updateFramesAnimation(&scene.animation, dt);
+}
+
+pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
+    _ = scene;
+    debug.draw_line(0, 0, 0.5, 0);
+    debug.draw_line(0.4, 0.5, 0.5, 0.5);
+    //debug.draw_line(0, 0.3, 0.7, 0.3);
+    //debug.draw_line(0, 0, -10, 20);
 }
