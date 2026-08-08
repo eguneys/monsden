@@ -1,4 +1,5 @@
-const Allocator = @import("std").mem.Allocator;
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const win32 = @import("win32/zigwin32/win32.zig");
 
 const HRESULT = win32.zig.HRESULT;
@@ -64,14 +65,16 @@ pub const MyFontFactory = struct {
         return .{ .dwrite_factory = dwrite_factory.?, .font_face = font_face };
     }
 
-    pub fn alphaBufferForOneGlyphRun(self: *Self, allocator: Allocator, font_size_px: f32, glyph_index: usize, baseline_x: f32, baseline_y: f32) !struct { buf: []u8, w: u32, h: u32 } {
-        var advance: f32 = 0.0; // single glpyph, no advance needed for its own analysis
+    pub fn alphaBufferForOneGlyphRun(self: *Self, allocator: Allocator, font_size_px: f32, glyph_index: u16, baseline_x: f32, baseline_y: f32) !struct { buf: []u8, w: u32, h: u32 } {
+        const raw_glyph_indices = [_]u16{glyph_index};
+        const glyph_indices: ?*const u16 = &raw_glyph_indices[0];
+
         const glyph_run = DWRITE_GLYPH_RUN{
             .fontFace = self.font_face,
             .fontEmSize = font_size_px,
             .glyphCount = 1,
-            .glyphIndices = @ptrCast(&glyph_index),
-            .glyphAdvances = &advance,
+            .glyphIndices = glyph_indices,
+            .glyphAdvances = null,
             .glyphOffsets = null,
             .isSideways = 0,
             .bidiLevel = 0,
@@ -82,7 +85,7 @@ pub const MyFontFactory = struct {
             &glyph_run,
             1.0,
             null,
-            .GDI_CLASSIC,
+            .ALIASED,
             .NATURAL,
             baseline_x,
             baseline_y,
@@ -94,6 +97,15 @@ pub const MyFontFactory = struct {
         var bounds: RECT = undefined;
         hr = analysis.?.GetAlphaTextureBounds(.ALIASED_1x1, &bounds);
         if (hr != HRESULT.S_OK) return error.FailedGetAlphaTextureBounds;
+
+        std.debug.print("{d} {}", .{ glyph_index, bounds });
+        if (bounds.left >= bounds.right or bounds.top >= bounds.bottom) {
+            return .{
+                .buf = try allocator.alloc(u8, 0),
+                .w = 0,
+                .h = 0,
+            };
+        }
 
         const w: u32 = @intCast(bounds.right - bounds.left);
         const h: u32 = @intCast(bounds.bottom - bounds.top);

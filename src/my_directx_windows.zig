@@ -1840,7 +1840,6 @@ const MyFontAtlasRasterizer = struct {
 
     const Atlas_Size: usize = 2048;
 
-    const FontSizes: []const u8 = &[_]u8{ 32, 64, 128 };
     const All_Glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     fn deinit(self: @This()) void {
@@ -1862,37 +1861,45 @@ const MyFontAtlasRasterizer = struct {
 
         var packer: ShelfPack = .{ .atlas_width = Atlas_Size, .atlas_height = Atlas_Size };
 
+        const font_size_px: u8 = 64;
+
         const baseline_x: usize = 0;
         const baseline_y: usize = 0;
-        for (FontSizes) |font_size_px| {
-            const AllCodePoints = [_]u32{0} ** 5;
-            const len = AllCodePoints.len;
-            var glyph_indices: [len]u16 = undefined;
-            var advances: [len]f32 = undefined;
-            var bearings_x: [len]i32 = undefined;
-            var bearings_y: [len]i32 = undefined;
+        var code_points: [All_Glyphs.len]u32 = undefined;
+        for (All_Glyphs, 0..) |c, i| {
+            code_points[i] = @intCast(c);
+        }
+        var glyph_indices: [All_Glyphs.len]u16 = undefined;
+        var advances: [All_Glyphs.len]f32 = undefined;
+        var bearings_x: [All_Glyphs.len]i32 = undefined;
+        var bearings_y: [All_Glyphs.len]i32 = undefined;
 
-            try font_Factory.GetGlyphIndices(font_size_px, &AllCodePoints, &glyph_indices, &advances, &bearings_x, &bearings_y);
+        try font_Factory.GetGlyphIndices(font_size_px, &code_points, &glyph_indices, &advances, &bearings_x, &bearings_y);
 
-            for (All_Glyphs) |glyph_index| {
-                const glyphImage = try font_Factory.alphaBufferForOneGlyphRun(allocator, font_size_px, glyph_index, baseline_x, baseline_y);
-                defer allocator.free(glyphImage.buf);
-                const xy = packer.allocate(glyphImage.w, glyphImage.h) orelse return error.IncreaseFontAtlasSize;
+        for (glyph_indices, 0..) |glyph_index, i| {
+            const glyphImage = try font_Factory.alphaBufferForOneGlyphRun(
+                allocator,
+                font_size_px,
+                glyph_index,
+                baseline_x,
+                baseline_y,
+            );
+            defer allocator.free(glyphImage.buf);
+            const xy = packer.allocate(glyphImage.w, glyphImage.h) orelse return error.IncreaseFontAtlasSize;
 
-                atlas_table[glyph_index] = .{
-                    .uv_rect = .{
-                        @as(f32, @floatFromInt(xy.x)),
-                        @as(f32, @floatFromInt(xy.y)),
-                        @as(f32, @floatFromInt(xy.x + glyphImage.w)),
-                        @as(f32, @floatFromInt(xy.y + glyphImage.h)),
-                    },
-                    .bearing_x = @as(f32, @floatFromInt(bearings_x[glyph_index])),
-                    .bearing_y = @as(f32, @floatFromInt(bearings_y[glyph_index])),
-                    .width = glyphImage.w,
-                    .height = glyphImage.h,
-                    .advance = advances[glyph_index],
-                };
-            }
+            atlas_table[i] = .{
+                .uv_rect = .{
+                    @as(f32, @floatFromInt(xy.x)),
+                    @as(f32, @floatFromInt(xy.y)),
+                    @as(f32, @floatFromInt(xy.x + glyphImage.w)),
+                    @as(f32, @floatFromInt(xy.y + glyphImage.h)),
+                },
+                .bearing_x = @as(f32, @floatFromInt(bearings_x[i])),
+                .bearing_y = @as(f32, @floatFromInt(bearings_y[i])),
+                .width = glyphImage.w,
+                .height = glyphImage.h,
+                .advance = advances[i],
+            };
         }
 
         return .{ .atlas_table = atlas_table };
