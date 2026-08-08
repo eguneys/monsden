@@ -156,7 +156,11 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         var fontRasterizer: MyFontAtlasRasterizer = try .init(context.device, context.context);
         defer fontRasterizer.deinit();
 
-        try fontRasterizer.buildAtlas(io, allocator);
+        _ = try fontRasterizer.buildAtlas(io, allocator);
+
+        const font_batch: MyFontBatch = try .init(context.device, context.context);
+
+        _ = font_batch;
 
         var keyboard: KeyboardState = .init();
         const platform: MyPlatform = .init(
@@ -1842,9 +1846,9 @@ const ShelfPack = @import("shelf_pack.zig");
 const MyFontAtlasRasterizer = struct {
     atlas_table: [All_Glyphs.len]GlyphEntry = undefined,
 
+    device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     atlas_tex: *ID3D11Texture2D,
-    atlas_srv: *ID3D11ShaderResourceView,
 
     const Atlas_Size: usize = 2048;
 
@@ -1852,7 +1856,7 @@ const MyFontAtlasRasterizer = struct {
 
     const Self = @This();
     fn deinit(self: *Self) void {
-        _ = self;
+        _ = self.atlas_tex.IUnknown.Release();
     }
 
     fn init(device: *ID3D11Device, context: *ID3D11DeviceContext) !Self {
@@ -1883,11 +1887,11 @@ const MyFontAtlasRasterizer = struct {
             .atlas_table = undefined,
             .context = context,
             .atlas_tex = atlas_tex,
-            .atlas_srv = atlas_srv,
+            .device = device,
         };
     }
 
-    fn buildAtlas(self: *Self, io: std.Io, allocator: Allocator) !void {
+    fn buildAtlas(self: *Self, io: std.Io, allocator: Allocator) !MyTexture {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const exePath = try MyAssetsPathLocator.executableDirPath(io, &buf);
 
@@ -1943,6 +1947,8 @@ const MyFontAtlasRasterizer = struct {
                 .advance = advances[i],
             };
         }
+
+        return self.CreateTexture();
     }
 
     fn uploadGlyph(self: *Self, rect: Rect, buf: []const u8) void {
@@ -1957,8 +1963,13 @@ const MyFontAtlasRasterizer = struct {
         self.context.UpdateSubresource(@ptrCast(self.atlas_tex), 0, &box, buf.ptr, @intFromFloat(rect.width), 0);
     }
 
-    fn bindForDrawing(self: *Self) void {
-        self.context.PSSetShaderResources(0, 1, @ptrCast(&self.atlas_srv));
+    fn CreateTexture(self: *Self) !MyTexture {
+        var Srv: *ID3D11ShaderResourceView = undefined;
+        const hr = self.device.CreateShaderResourceView(@ptrCast(self.atlas_tex), null, @ptrCast(&Srv));
+        if (hr != HRESULT.S_OK) return error.CreateAtlasSRVFailed;
+        errdefer _ = Srv.IUnknown.Release();
+
+        return .{ .Width = Atlas_Size, .Height = Atlas_Size, .Srv = Srv };
     }
 };
 
