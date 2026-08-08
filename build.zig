@@ -62,6 +62,22 @@ pub fn build(b: *std.Build) void {
         shader_dir ++ "/debug.hlsl",
     });
 
+    const compile_font_vs = b.addSystemCommand(&.{
+        "bin/fxc.exe",              "/nologo",
+        "/T",                       "vs_5_0",
+        "/E",                       "VSMain",
+        "/Fo",                      shader_dir ++ "/font_vs.cso",
+        shader_dir ++ "/font.hlsl",
+    });
+
+    const compile_font_ps = b.addSystemCommand(&.{
+        "bin/fxc.exe",              "/nologo",
+        "/T",                       "ps_5_0",
+        "/E",                       "PSMain",
+        "/Fo",                      shader_dir ++ "/font_ps.cso",
+        shader_dir ++ "/font.hlsl",
+    });
+
     //exe.subsystem = .Windows;
 
     exe.step.dependOn(&compile_vs.step);
@@ -70,6 +86,8 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&compile_blit_ps.step);
     exe.step.dependOn(&compile_debug_vs.step);
     exe.step.dependOn(&compile_debug_ps.step);
+    exe.step.dependOn(&compile_font_vs.step);
+    exe.step.dependOn(&compile_font_ps.step);
 
     // single file
     //b.installFile("data/opening.pgn", "bin/opening.pgn");

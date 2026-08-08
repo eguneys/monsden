@@ -13,7 +13,8 @@ const Camera = @import("camera.zig");
 const MySpriteBatch = @import("my_platform_initializers.zig").MySpriteBatch;
 const MyGamePlatform = @import("my_platform_initializers.zig").MyGamePlatform;
 
-const png = @import("png.zig");
+const myFont = @import("my_font.zig");
+const png = @import("my_png.zig");
 const MyAssetsPathLocator = @import("assets.zig").MyAssetsPathLocator;
 
 const math = @import("math.zig");
@@ -148,6 +149,10 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
 
         var context: MyDirectXContext = try .init(hwndV);
         const resources: MyTextureResources = try .init(io, allocator, &context);
+
+        var fontRasterizer = try MyFontAtlasRasterizer.buildAtlas(io, allocator);
+        defer fontRasterizer.deinit();
+
         var batch: MyBatchDraw = try .init(context.device, context.context);
         var debug: MyDebugDraw = try .init(context.device, context.context);
 
@@ -327,6 +332,9 @@ const blit_ps_bytecode = @embedFile("shaders/blit_ps.cso");
 
 const debug_vs_bytecode = @embedFile("shaders/debug_vs.cso");
 const debug_ps_bytecode = @embedFile("shaders/debug_ps.cso");
+
+const font_vs_bytecode = @embedFile("shaders/font_vs.cso");
+const font_ps_bytecode = @embedFile("shaders/font_ps.cso");
 
 const ID3D11VertexShader = win32.graphics.direct3d11.ID3D11VertexShader;
 const ID3D11PixelShader = win32.graphics.direct3d11.ID3D11PixelShader;
@@ -1430,6 +1438,307 @@ pub const MyBatchDraw = struct {
     }
 };
 
+const FontVertex = extern struct {
+    pos: [3]f32,
+    uv: [2]f32,
+    color: [4]f32,
+};
+
+pub const MyFontBatch = struct {
+    context: *ID3D11DeviceContext,
+
+    input_layout: *ID3D11InputLayout,
+    vertex_buffer: *ID3D11Buffer,
+    index_buffer: *ID3D11Buffer,
+
+    vertex_shader: *ID3D11VertexShader,
+    pixel_shader: *ID3D11PixelShader,
+
+    current_texture: ?*MyTexture = null,
+    sprite_count: u32 = 0,
+    mapped: D3D11_MAPPED_SUBRESOURCE = undefined,
+
+    rasterizer_state: *ID3D11RasterizerState,
+    blend_state: *ID3D11BlendState,
+
+    stride: u32,
+    vb_offset: u32,
+
+    fn deinit(self: *Self) void {
+        _ = self.input_layout.IUnknown.Release();
+
+        _ = self.vertex_buffer.IUnknown.Release();
+        _ = self.index_buffer.IUnknown.Release();
+
+        _ = self.vertex_shader.IUnknown.Release();
+        _ = self.pixel_shader.IUnknown.Release();
+
+        _ = self.rasterizer_state.IUnknown.Release();
+        _ = self.blend_state.IUnknown.Release();
+    }
+
+    fn init(device: *ID3D11Device, context: *ID3D11DeviceContext) !Self {
+        var rasterizer_desc = D3D11_RASTERIZER_DESC{
+            .FillMode = D3D11_FILL_SOLID,
+            .CullMode = D3D11_CULL_NONE,
+            .DepthClipEnable = TRUE,
+            .AntialiasedLineEnable = FALSE,
+            .DepthBias = FALSE,
+            .DepthBiasClamp = FALSE,
+            .FrontCounterClockwise = FALSE,
+            .MultisampleEnable = FALSE,
+            .ScissorEnable = FALSE,
+            .SlopeScaledDepthBias = FALSE,
+        };
+
+        var rasterizer_state: *ID3D11RasterizerState = undefined;
+        var hr = device.CreateRasterizerState(&rasterizer_desc, @ptrCast(&rasterizer_state));
+        if (hr != HRESULT.S_OK) return error.CreateRasterizerStateFailed;
+        errdefer _ = rasterizer_state.IUnknown.Release();
+
+        var blend_desc = D3D11_BLEND_DESC{
+            .AlphaToCoverageEnable = FALSE,
+            .IndependentBlendEnable = FALSE,
+            .RenderTarget = undefined,
+        };
+
+        blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC{
+            .BlendEnable = TRUE,
+            .SrcBlend = D3D11_BLEND_SRC_ALPHA,
+            .DestBlend = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOp = D3D11_BLEND_OP_ADD,
+            .SrcBlendAlpha = D3D11_BLEND_ONE,
+            .DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOpAlpha = D3D11_BLEND_OP_ADD,
+            .RenderTargetWriteMask = @intFromEnum(D3D11_COLOR_WRITE_ENABLE_ALL),
+        };
+
+        var blend_state: *ID3D11BlendState = undefined;
+        hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
+        if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
+        errdefer _ = blend_state.IUnknown.Release();
+
+        // Shader additions
+        var vertex_shader: *ID3D11VertexShader = undefined;
+        hr = device.CreateVertexShader(font_vs_bytecode, font_vs_bytecode.len, null, @ptrCast(&vertex_shader));
+        if (hr != HRESULT.S_OK) return error.CreateVertexShaderFailed;
+        errdefer _ = vertex_shader.IUnknown.Release();
+
+        var pixel_shader: *ID3D11PixelShader = undefined;
+        hr = device.CreatePixelShader(font_ps_bytecode, font_ps_bytecode.len, null, @ptrCast(&pixel_shader));
+        if (hr != HRESULT.S_OK) return error.CreatePixelShaderFailed;
+        errdefer _ = pixel_shader.IUnknown.Release();
+
+        const input_element_descs = [_]D3D11_INPUT_ELEMENT_DESC{
+            .{
+                .SemanticName = "POSITION",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 0,
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+            .{
+                .SemanticName = "TEXCOORD",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 12, // 3 floats * 4 bytes = offset past pos
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+            .{
+                .SemanticName = "COLOR",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 12 + 8, // 12 + 2 floats * 4 bytes = offset past pos
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+        };
+
+        var input_layout: *ID3D11InputLayout = undefined;
+        hr = device.CreateInputLayout(
+            &input_element_descs,
+            input_element_descs.len,
+            vs_bytecode,
+            vs_bytecode.len,
+            @ptrCast(&input_layout),
+        );
+        if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
+        errdefer _ = input_layout.IUnknown.Release();
+
+        var indices: [MAX_SPRITES_PER_BATCH * 6]u16 = undefined;
+        for (0..MAX_SPRITES_PER_BATCH) |i| {
+            const v: u16 = @intCast(i * 4);
+            const base = i * 6;
+            indices[base..][0..6].* = .{ v + 0, v + 1, v + 2, v + 0, v + 2, v + 3 };
+        }
+
+        var buffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(Vertex) * 4 * MAX_SPRITES_PER_BATCH,
+            //.ByteWidth = @sizeOf(@TypeOf(vertices)),
+            //.Usage = D3D11_USAGE_IMMUTABLE,
+            .Usage = D3D11_USAGE_DYNAMIC,
+            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var vertex_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
+        errdefer _ = vertex_buffer.IUnknown.Release();
+
+        var index_buf_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(@TypeOf(indices)),
+            .Usage = D3D11_USAGE_IMMUTABLE,
+            .BindFlags = D3D11_BIND_INDEX_BUFFER,
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+        var ib_init = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = &indices,
+            .SysMemPitch = 0,
+            .SysMemSlicePitch = 0,
+        };
+
+        var index_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&index_buf_desc, &ib_init, @ptrCast(&index_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateIndexBufferFailed;
+        errdefer _ = index_buffer.IUnknown.Release();
+
+        const stride: u32 = @sizeOf(FontVertex);
+        const vb_offset: u32 = 0;
+
+        return .{
+            .stride = stride,
+            .vb_offset = vb_offset,
+
+            .context = context,
+            .vertex_buffer = vertex_buffer,
+            .index_buffer = index_buffer,
+
+            .input_layout = input_layout,
+            .vertex_shader = vertex_shader,
+            .pixel_shader = pixel_shader,
+
+            .rasterizer_state = rasterizer_state,
+            .blend_state = blend_state,
+        };
+    }
+
+    const Self = @This();
+
+    fn SetShaderResourceForTexture(self: *Self, texture: *MyTexture) void {
+        var raw_srv = [_]?*ID3D11ShaderResourceView{texture.Srv};
+        self.context.PSSetShaderResources(0, 1, @ptrCast(&raw_srv));
+    }
+
+    pub fn endBatch(self: *Self) !void {
+        try self.flush();
+
+        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+    }
+
+    pub fn beginBatchSetupState(self: *Self) !void {
+        self.context.RSSetState(self.rasterizer_state);
+        self.context.IASetInputLayout(self.input_layout);
+        self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        const strides = &[_]u32{self.stride};
+        const vb_offsets = &[_]u32{self.vb_offset};
+        self.context.IASetVertexBuffers(0, 1, @ptrCast(&self.vertex_buffer), strides, vb_offsets);
+
+        self.context.VSSetShader(self.vertex_shader, null, 0);
+        self.context.PSSetShader(self.pixel_shader, null, 0);
+
+        self.context.IASetIndexBuffer(self.index_buffer, DXGI_FORMAT_R16_UINT, 0);
+
+        const blendFactor: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 };
+        const sampleMask = 0xffffffff;
+        self.context.OMSetBlendState(self.blend_state, @ptrCast(&blendFactor), sampleMask);
+    }
+
+    pub fn beginBatch(self: *Self) !void {
+        const hr = self.context.Map(
+            @ptrCast(self.vertex_buffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &self.mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        self.sprite_count = 0;
+        self.current_texture = null;
+    }
+
+    fn flush(self: *Self) !void {
+        if (self.sprite_count == 0) return;
+
+        self.SetShaderResourceForTexture(self.current_texture.?);
+
+        self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+
+        self.context.DrawIndexed(self.sprite_count * 6, 0, 0);
+
+        const hr = self.context.Map(
+            @ptrCast(self.vertex_buffer),
+            0,
+            //D3D11_MAP_WRITE_NO_OVERWRITE,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &self.mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        self.sprite_count = 0;
+    }
+
+    pub fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect) !void {
+        if (self.sprite_count == MAX_SPRITES_PER_BATCH) {
+            try self.flush();
+        }
+        if (self.current_texture != null and self.current_texture.? != texture) {
+            try self.flush();
+        }
+        self.current_texture = texture;
+
+        const dst: [*]Vertex = @ptrCast(@alignCast(self.mapped.pData));
+
+        // source rect
+        const _u0 = source_rect.x / @as(f32, @floatFromInt(texture.Width));
+        const v0 = source_rect.y / @as(f32, @floatFromInt(texture.Height));
+        const _u1 = (source_rect.x + source_rect.width) / @as(f32, @floatFromInt(texture.Width));
+        const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(texture.Height));
+
+        //dest rect
+        const ndc_x0 = dest_rect.x;
+        const ndc_y0 = dest_rect.y;
+        const ndc_x1 = dest_rect.x + dest_rect.width;
+        const ndc_y1 = dest_rect.y + dest_rect.height;
+
+        const quad_vertices = [_]Vertex{
+            .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
+            .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
+            .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 } }, //bottom-right
+            .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
+        };
+
+        const base = self.sprite_count * 4;
+
+        dst[base + 0] = quad_vertices[0];
+        dst[base + 1] = quad_vertices[1];
+        dst[base + 2] = quad_vertices[2];
+        dst[base + 3] = quad_vertices[3];
+
+        self.sprite_count += 1;
+    }
+};
+
 const MyTexture = struct {
     Width: u32,
     Height: u32,
@@ -1454,6 +1763,7 @@ pub const MyPlatform = struct {
         self.cx.deinit();
         self.resources.deinit();
         self.debug.deinit();
+        self.batch.deinit();
     }
 
     fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, resources: MyTextureResources, keyboard: *KeyboardState) Self {
@@ -1522,4 +1832,78 @@ const MyTextureResources = struct {
             .texBackground = try cx.CreateMyTexture(bgRGBA),
         };
     }
+};
+
+const ShelfPack = @import("shelf_pack.zig");
+const MyFontAtlasRasterizer = struct {
+    atlas_table: [All_Glyphs.len]GlyphEntry = undefined,
+
+    const Atlas_Size: usize = 2048;
+
+    const FontSizes: []const u8 = &[_]u8{ 32, 64, 128 };
+    const All_Glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    fn deinit(self: @This()) void {
+        _ = self;
+    }
+
+    fn buildAtlas(io: std.Io, allocator: Allocator) !MyFontAtlasRasterizer {
+        var atlas_table: [All_Glyphs.len]GlyphEntry = undefined;
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const exePath = try MyAssetsPathLocator.executableDirPath(io, &buf);
+
+        const fontPath = try MyAssetsPathLocator.PngPath(allocator, exePath, "GoogleSansFlex_24pt-Light.ttf");
+        defer allocator.free(fontPath);
+
+        const fontU16 = try MyAssetsPathLocator.convertToU16WindowsPath(allocator, fontPath);
+        defer allocator.free(fontU16);
+
+        var font_Factory = try myFont.MyFontFactory.init(fontU16);
+
+        var packer: ShelfPack = .{ .atlas_width = Atlas_Size, .atlas_height = Atlas_Size };
+
+        const baseline_x: usize = 0;
+        const baseline_y: usize = 0;
+        for (FontSizes) |font_size_px| {
+            const AllCodePoints = [_]u32{0} ** 5;
+            const len = AllCodePoints.len;
+            var glyph_indices: [len]u16 = undefined;
+            var advances: [len]f32 = undefined;
+            var bearings_x: [len]i32 = undefined;
+            var bearings_y: [len]i32 = undefined;
+
+            try font_Factory.GetGlyphIndices(font_size_px, &AllCodePoints, &glyph_indices, &advances, &bearings_x, &bearings_y);
+
+            for (All_Glyphs) |glyph_index| {
+                const glyphImage = try font_Factory.alphaBufferForOneGlyphRun(allocator, font_size_px, glyph_index, baseline_x, baseline_y);
+                defer allocator.free(glyphImage.buf);
+                const xy = packer.allocate(glyphImage.w, glyphImage.h) orelse return error.IncreaseFontAtlasSize;
+
+                atlas_table[glyph_index] = .{
+                    .uv_rect = .{
+                        @as(f32, @floatFromInt(xy.x)),
+                        @as(f32, @floatFromInt(xy.y)),
+                        @as(f32, @floatFromInt(xy.x + glyphImage.w)),
+                        @as(f32, @floatFromInt(xy.y + glyphImage.h)),
+                    },
+                    .bearing_x = @as(f32, @floatFromInt(bearings_x[glyph_index])),
+                    .bearing_y = @as(f32, @floatFromInt(bearings_y[glyph_index])),
+                    .width = glyphImage.w,
+                    .height = glyphImage.h,
+                    .advance = advances[glyph_index],
+                };
+            }
+        }
+
+        return .{ .atlas_table = atlas_table };
+    }
+};
+
+pub const GlyphEntry = struct {
+    uv_rect: [4]f32,
+    bearing_x: f32,
+    bearing_y: f32,
+    width: u32,
+    height: u32,
+    advance: f32,
 };
