@@ -44,3 +44,17 @@ pub const DebugBatch = struct {
         self.vtable.drawCircle(self.ptr, .{ x0, y0 }, r, .{ 0.0, 1.0, 0.0, 1.0 });
     }
 };
+
+pub const FontBatch = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        drawText: *const fn (ctx: *anyopaque, x: f32, y: f32, text: []const u8) void,
+    };
+
+    const Self = @This();
+    pub fn draw_text(self: Self, x: f32, y: f32, text: []const u8) void {
+        self.vtable.drawText(self.ptr, x, y, text);
+    }
+};

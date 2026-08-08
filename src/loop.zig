@@ -6,8 +6,10 @@ const Camera = @import("camera.zig");
 const Input = @import("input.zig");
 
 const scn = @import("scene.zig");
-const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
-const DebugBatch = @import("draw_spr.zig").DebugBatch;
+const ds = @import("draw_spr.zig");
+const SpriteBatch = ds.SpriteBatch;
+const DebugBatch = ds.DebugBatch;
+const FontBatch = ds.FontBatch;
 
 pub const KeyboardState = struct {
     current: [256]bool = [_]bool{false} ** 256,
@@ -52,6 +54,10 @@ pub const GamePlatform = struct {
         deinit: *const fn (ctx: *anyopaque) void,
         spriteBatch: *const fn (ctx: *anyopaque) SpriteBatch,
         debugBatch: *const fn (ctx: *anyopaque) DebugBatch,
+        fontBatch: *const fn (ctx: *anyopaque) FontBatch,
+
+        beginFontDraw: *const fn (ctx: *anyopaque) void,
+        endFontDraw: *const fn (ctx: *anyopaque) void,
 
         beginDebugDraw: *const fn (ctx: *anyopaque) void,
         endDebugDraw: *const fn (ctx: *anyopaque) void,
@@ -86,6 +92,9 @@ pub const GamePlatform = struct {
 
     pub fn spriteBatch(self: *Self) SpriteBatch {
         return self.vtable.spriteBatch(self.ptr);
+    }
+    pub fn fontBatch(self: *Self) FontBatch {
+        return self.vtable.fontBatch(self.ptr);
     }
 
     pub fn toggleFullscreen(self: *Self) void {
@@ -124,6 +133,13 @@ pub const GamePlatform = struct {
 
     pub fn endDebugDraw(self: *Self) void {
         self.vtable.endDebugDraw(self.ptr);
+    }
+    pub fn beginFontDraw(self: *Self) void {
+        self.vtable.beginFontDraw(self.ptr);
+    }
+
+    pub fn endFontDraw(self: *Self) void {
+        self.vtable.endFontDraw(self.ptr);
     }
 
     pub fn onResize(self: *Self, new_width: u32, new_height: u32) void {
@@ -205,6 +221,11 @@ pub const GameManager = struct {
         self.platform.drawPass2();
 
         self.platform.beginPass3(self.scene.camera);
+
+        self.platform.beginFontDraw();
+        scn.renderHUD(self.platform.spriteBatch(), self.platform.fontBatch(), &self.scene);
+        self.platform.endFontDraw();
+
         self.platform.drawPass3();
 
         self.platform.endDraw();

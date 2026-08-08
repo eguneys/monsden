@@ -3,8 +3,10 @@ const Camera = @import("camera.zig");
 const math = @import("math.zig");
 const Rect = math.Rect;
 
-const DebugBatch = @import("draw_spr.zig").DebugBatch;
-const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
+const ds = @import("draw_spr.zig");
+const FontBatch = ds.FontBatch;
+const DebugBatch = ds.DebugBatch;
+const SpriteBatch = ds.SpriteBatch;
 const GamePlatform = @import("loop.zig").GamePlatform;
 const KeyboardState = @import("loop.zig").KeyboardState;
 
@@ -73,11 +75,39 @@ pub const MySpriteBatch = struct {
     }
 };
 
+pub const MyFontBatch = struct {
+    const Self = @This();
+
+    platform: MyPlatform,
+
+    fn drawTextImpl(ctx: *anyopaque, x: f32, y: f32, text: []const u8) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        const source_rect: Rect = .{ .x = 0, .y = 0, .width = 100, .height = 100 };
+        const dest_rect: Rect = .{ .x = x, .y = y, .width = 100, .height = 100 };
+        _ = text;
+
+        self.platform.font_batch.drawSprite(&self.platform.resources.texBackground, source_rect, dest_rect) catch unreachable;
+    }
+
+    const vtable = FontBatch.VTable{
+        .drawText = drawTextImpl,
+    };
+
+    pub fn fontBatch(self: *Self) FontBatch {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
+        };
+    }
+};
+
 pub const MyGamePlatform = struct {
     platform: MyPlatform,
 
     batch: MySpriteBatch,
     debug: MyDebugBatch,
+    font: MyFontBatch,
 
     pub fn deinit(self: *Self) void {
         self.platform.deinit();
@@ -89,6 +119,7 @@ pub const MyGamePlatform = struct {
             .platform = platform,
             .batch = .{ .platform = platform },
             .debug = .{ .platform = platform },
+            .font = .{ .platform = platform },
         };
     }
 
@@ -146,6 +177,22 @@ pub const MyGamePlatform = struct {
     fn debugBatchImpl(ctx: *anyopaque) DebugBatch {
         const self: *Self = @ptrCast(@alignCast(ctx));
         return self.debug.debugBatch();
+    }
+    fn fontBatchImpl(ctx: *anyopaque) FontBatch {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.font.fontBatch();
+    }
+
+    fn beginFontDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        self.platform.font_batch.beginBatchSetupState() catch unreachable;
+        self.platform.font_batch.beginBatch() catch unreachable;
+    }
+    fn endFontDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        self.platform.font_batch.endBatch() catch unreachable;
     }
 
     fn beginDebugDrawImpl(ctx: *anyopaque) void {
@@ -209,7 +256,10 @@ pub const MyGamePlatform = struct {
         .deinit = deinitImpl,
         .spriteBatch = spriteBatchImpl,
         .debugBatch = debugBatchImpl,
+        .fontBatch = fontBatchImpl,
 
+        .beginFontDraw = beginFontDrawImpl,
+        .endFontDraw = endFontDrawImpl,
         .beginDebugDraw = beginDebugDrawImpl,
         .endDebugDraw = endDebugDrawImpl,
         .beginSpriteDraw = beginSpriteDrawImpl,

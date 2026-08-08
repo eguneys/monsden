@@ -24,6 +24,7 @@ PSInput VSMain(VSInput input)
     PSInput output;
     output.pos = mul(view_projection, float4(input.pos, 1.0));
     output.uv = input.uv;
+    output.color = input.color;
     return output;
 }
 

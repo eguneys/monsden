@@ -153,20 +153,14 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         var batch: MyBatchDraw = try .init(context.device, context.context);
         var debug: MyDebugDraw = try .init(context.device, context.context);
 
-        var fontRasterizer: MyFontAtlasRasterizer = try .init(context.device, context.context);
-        defer fontRasterizer.deinit();
-
-        _ = try fontRasterizer.buildAtlas(io, allocator);
-
-        const font_batch: MyFontBatch = try .init(context.device, context.context);
-
-        _ = font_batch;
+        var font_batch: MyFontBatch = try .init(context.device, context.context);
 
         var keyboard: KeyboardState = .init();
         const platform: MyPlatform = .init(
             &context,
             &batch,
             &debug,
+            &font_batch,
             resources,
             &keyboard,
         );
@@ -713,6 +707,25 @@ const MyDirectXContext = struct {
         };
     }
 
+    fn SetCBuffer2(self: Self, camera: Camera) !void {
+        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
+        const hr = self.context.Map(
+            @ptrCast(self.cbuffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        const dest: *CameraConstants = @ptrCast(@alignCast(mapped.pData));
+        dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(font_width, font_height) };
+        self.context.Unmap(@ptrCast(self.cbuffer), 0);
+
+        var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
+        //const pp_cbuffer: ?[*]?*ID3D11SamplerState = &pp_raw_c_buffer;
+        self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
+    }
+
     fn SetCBuffer(self: Self, camera: Camera) !void {
         var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
         const hr = self.context.Map(
@@ -839,8 +852,7 @@ const MyDirectXContext = struct {
         self.context.RSSetViewports(1, @ptrCast(&self.font_viewport));
         self.context.ClearRenderTargetView(self.font_rtv, @ptrCast(&self.font_clear_color[0]));
 
-        _ = camera;
-        //try self.SetCBuffer(camera);
+        try self.SetCBuffer2(camera);
     }
 
     pub fn drawPass2(self: *Self) void {
@@ -1569,8 +1581,8 @@ pub const MyFontBatch = struct {
         hr = device.CreateInputLayout(
             &input_element_descs,
             input_element_descs.len,
-            vs_bytecode,
-            vs_bytecode.len,
+            font_vs_bytecode,
+            font_vs_bytecode.len,
             @ptrCast(&input_layout),
         );
         if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
@@ -1584,7 +1596,7 @@ pub const MyFontBatch = struct {
         }
 
         var buffer_desc = D3D11_BUFFER_DESC{
-            .ByteWidth = @sizeOf(Vertex) * 4 * MAX_SPRITES_PER_BATCH,
+            .ByteWidth = @sizeOf(FontVertex) * 4 * MAX_SPRITES_PER_BATCH,
             //.ByteWidth = @sizeOf(@TypeOf(vertices)),
             //.Usage = D3D11_USAGE_IMMUTABLE,
             .Usage = D3D11_USAGE_DYNAMIC,
@@ -1758,6 +1770,7 @@ const MyTexture = struct {
 pub const MyPlatform = struct {
     cx: *MyDirectXContext,
     batch: *MyBatchDraw,
+    font_batch: *MyFontBatch,
     resources: MyTextureResources,
 
     debug: *MyDebugDraw,
@@ -1770,12 +1783,14 @@ pub const MyPlatform = struct {
         self.resources.deinit();
         self.debug.deinit();
         self.batch.deinit();
+        self.font_batch.deinit();
     }
 
-    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, resources: MyTextureResources, keyboard: *KeyboardState) Self {
+    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, font_batch: *MyFontBatch, resources: MyTextureResources, keyboard: *KeyboardState) Self {
         return .{
             .cx = cx,
             .batch = batch,
+            .font_batch = font_batch,
             .resources = resources,
             .debug = debug,
             .keyboard = keyboard,
@@ -1800,6 +1815,7 @@ pub const MyPlatform = struct {
 const MyTextureResources = struct {
     texSprites: MyTexture,
     texBackground: MyTexture,
+    texFontAtlas: MyTexture,
 
     const Self = @This();
 
@@ -1833,9 +1849,15 @@ const MyTextureResources = struct {
         var pngBuf2: [1024 * 100 * 1]u8 = undefined;
         const bgRGBA = try mywic_factory.png(bgPngU16, &pngBuf2);
 
+        var fontRasterizer: MyFontAtlasRasterizer = try .init(cx.device, cx.context);
+        defer fontRasterizer.deinit();
+
+        const texFontAtlas = try fontRasterizer.buildAtlas(io, allocator);
+
         return .{
             .texSprites = try cx.CreateMyTexture(spritesRGBA),
             .texBackground = try cx.CreateMyTexture(bgRGBA),
+            .texFontAtlas = texFontAtlas,
         };
     }
 };
@@ -1952,7 +1974,7 @@ const MyFontAtlasRasterizer = struct {
     }
 
     fn uploadGlyph(self: *Self, rect: Rect, buf: []const u8) void {
-        var box = D3D11_BOX{
+        const box = D3D11_BOX{
             .left = @intFromFloat(rect.x),
             .top = @intFromFloat(rect.y),
             .right = @intFromFloat(rect.x + rect.width),
@@ -1960,7 +1982,11 @@ const MyFontAtlasRasterizer = struct {
             .front = 0,
             .back = 0,
         };
-        self.context.UpdateSubresource(@ptrCast(self.atlas_tex), 0, &box, buf.ptr, @intFromFloat(rect.width), 0);
+        _ = self;
+        _ = box;
+        _ = buf;
+
+        //self.context.UpdateSubresource(@ptrCast(self.atlas_tex), 0, &box, buf.ptr, @intFromFloat(rect.width), 0);
     }
 
     fn CreateTexture(self: *Self) !MyTexture {

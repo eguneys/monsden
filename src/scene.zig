@@ -1,5 +1,7 @@
-const SpriteBatch = @import("draw_spr.zig").SpriteBatch;
-const DebugBatch = @import("draw_spr.zig").DebugBatch;
+const ds = @import("draw_spr.zig");
+const SpriteBatch = ds.SpriteBatch;
+const DebugBatch = ds.DebugBatch;
+const FontBatch = ds.FontBatch;
 
 const math = @import("math.zig");
 const anim = @import("anim.zig");
@@ -23,17 +25,20 @@ pub const Scene = struct {
 
 pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
     _ = alpha;
-    batch.draw_bg(0, 0, 32, 32, 5, 5, 10, 10);
+    _ = scene;
+    //_ = batch;
+
+    //batch.draw_bg(0, 0, 32, 32, 5, 5, 10, 10);
     batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
-    scene.animation.dest.x = 0;
-    scene.animation.dest.y = 0;
-    anim.renderFramesAnimation(batch, &scene.animation);
-    {
-        const i = 1;
-        scene.animation.dest.x = @floatFromInt(i % 30 * 30);
-        scene.animation.dest.y = @floatFromInt(i / 30 * 30);
-        anim.renderFramesAnimation(batch, &scene.animation);
-    }
+    //scene.animation.dest.x = 0;
+    //scene.animation.dest.y = 0;
+    //anim.renderFramesAnimation(batch, &scene.animation);
+    //{
+    //    const i = 1;
+    //    scene.animation.dest.x = @floatFromInt(i % 30 * 30);
+    //    scene.animation.dest.y = @floatFromInt(i / 30 * 30);
+    //    anim.renderFramesAnimation(batch, &scene.animation);
+    //}
 
     //for (0..1000) |i| {
     //    scene.animation.dest.x = @floatFromInt(i % 30 * 30);
@@ -52,4 +57,11 @@ pub fn updateScene(scene: *Scene, dt: f64) void {
 pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
     _ = scene;
     _ = debug;
+}
+
+pub fn renderHUD(batch: SpriteBatch, font: FontBatch, scene: *Scene) void {
+    _ = batch;
+    _ = scene;
+
+    font.draw_text(0, 0, "kjasdf");
 }
