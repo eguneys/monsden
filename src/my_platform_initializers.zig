@@ -107,12 +107,24 @@ pub const MyGamePlatform = struct {
     }
     fn beginDrawImpl(ctx: *anyopaque, camera: Camera) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
-        return self.platform.beginDraw(camera) catch unreachable;
+        self.platform.cx.beginPass1(camera) catch unreachable;
     }
     fn endDrawImpl(ctx: *anyopaque) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.platform.cx.endPass3();
+    }
+    fn beginPass3Impl(ctx: *anyopaque, camera: Camera) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.cx.beginPass3(camera) catch unreachable;
+    }
 
-        return self.platform.endDraw();
+    fn drawPass2Impl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.cx.drawPass2();
+    }
+    fn drawPass3Impl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.platform.cx.drawPass3();
     }
 
     fn onResizeImpl(ctx: *anyopaque, new_width: u32, new_height: u32) void {
@@ -189,10 +201,15 @@ pub const MyGamePlatform = struct {
         .toggleFullscreen = toggleFullscreenImpl,
         .beginDraw = beginDrawImpl,
         .endDraw = endDrawImpl,
+        .beginPass3 = beginPass3Impl,
+        .drawPass2 = drawPass2Impl,
+        .drawPass3 = drawPass3Impl,
+
         .onResize = onResizeImpl,
         .deinit = deinitImpl,
         .spriteBatch = spriteBatchImpl,
         .debugBatch = debugBatchImpl,
+
         .beginDebugDraw = beginDebugDrawImpl,
         .endDebugDraw = endDebugDrawImpl,
         .beginSpriteDraw = beginSpriteDrawImpl,

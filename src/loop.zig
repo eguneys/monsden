@@ -45,6 +45,9 @@ pub const GamePlatform = struct {
         toggleFullscreen: *const fn (ctx: *anyopaque) void,
         beginDraw: *const fn (ctx: *anyopaque, camera: Camera) void,
         endDraw: *const fn (ctx: *anyopaque) void,
+        beginPass3: *const fn (ctx: *anyopaque, camera: Camera) void,
+        drawPass2: *const fn (ctx: *anyopaque) void,
+        drawPass3: *const fn (ctx: *anyopaque) void,
         onResize: *const fn (ctx: *anyopaque, new_width: u32, new_height: u32) void,
         deinit: *const fn (ctx: *anyopaque) void,
         spriteBatch: *const fn (ctx: *anyopaque) SpriteBatch,
@@ -93,8 +96,18 @@ pub const GamePlatform = struct {
         self.vtable.beginDraw(self.ptr, camera);
     }
 
+    pub fn beginPass3(self: *Self, camera: Camera) void {
+        self.vtable.beginPass3(self.ptr, camera);
+    }
+
     pub fn endDraw(self: *Self) void {
         self.vtable.endDraw(self.ptr);
+    }
+    pub fn drawPass2(self: *Self) void {
+        self.vtable.drawPass2(self.ptr);
+    }
+    pub fn drawPass3(self: *Self) void {
+        self.vtable.drawPass3(self.ptr);
     }
 
     pub fn beginSpriteDraw(self: *Self) void {
@@ -188,6 +201,11 @@ pub const GameManager = struct {
         self.platform.beginDebugDraw();
         scn.renderDebug(self.platform.debugBatch(), &self.scene);
         self.platform.endDebugDraw();
+
+        self.platform.drawPass2();
+
+        self.platform.beginPass3(self.scene.camera);
+        self.platform.drawPass3();
 
         self.platform.endDraw();
     }

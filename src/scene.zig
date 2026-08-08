@@ -45,24 +45,11 @@ pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
 pub fn updateScene(scene: *Scene, dt: f64) void {
     scene.t += @floatCast(dt);
     anim.updateFramesAnimation(&scene.animation, dt);
-    scene.camera.position[0] = @sin(scene.t) * 200;
+    //scene.camera.position[0] = @sin(scene.t) * 200;
     //scene.camera.zoom = @sin(scene.t) * 0.5;
 }
 
 pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
     _ = scene;
-    debug.draw_line(0, 0, 0, 0);
-    for (0..10) |j| {
-        const y: f32 = @floatFromInt(j * 30);
-        debug.draw_line(-150, -50, 160 - y, 170);
-        for (0..10) |i| {
-            const x: f32 = @floatFromInt(i * 30);
-            debug.draw_circle(-100 + x, -100 + y, 10);
-        }
-    }
-    //debug.draw_line(0, -100, -360 / 2 + 10, -360 / 2 + 10);
-    //debug.draw_line(50, 100, 360 / 2 - 10, 360 / 2 - 10);
-
-    //debug.draw_line(-80, -80, 0, 80);
-    //debug.draw_line(-10, 10, 50, 50);
+    _ = debug;
 }

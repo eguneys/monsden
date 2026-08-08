@@ -58,6 +58,9 @@ const AdjustWindowRectEx = win32.user32.AdjustWindowRectEx;
 const game_width: u32 = 640;
 const game_height: u32 = 360;
 
+const font_width: u32 = 1920;
+const font_height: u32 = 1080;
+
 const SetWindowLongPtrW = win32.user32.SetWindowLongPtrW;
 const GetWindowLongPtrW = win32.user32.GetWindowLongPtrW;
 
@@ -397,6 +400,7 @@ const MAX_SPRITES_PER_BATCH = 500;
 const MyDirectXContext = struct {
     backbuffer_rtv: ?*ID3D11RenderTargetView,
     game_rtv: *ID3D11RenderTargetView,
+    font_rtv: *ID3D11RenderTargetView,
 
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
@@ -407,8 +411,8 @@ const MyDirectXContext = struct {
 
     letterbox_color: [4]f32,
 
-    null_srv: ?*ID3D11ShaderResourceView,
     game_srv: *ID3D11ShaderResourceView,
+    font_srv: *ID3D11ShaderResourceView,
 
     sampler: *ID3D11SamplerState,
     cbuffer: *ID3D11Buffer,
@@ -416,8 +420,11 @@ const MyDirectXContext = struct {
     hwnd: HWND,
 
     game_viewport: D3D11_VIEWPORT,
+    font_viewport: D3D11_VIEWPORT,
 
+    font_clear_color: [4]f32,
     world_clear_color: [4]f32,
+    blend_state: *ID3D11BlendState,
 
     is_fullscreen: bool = false,
     windowed_style: u32 = 0, // WS_OVERLAPPEDWINDOW etc,
@@ -433,11 +440,16 @@ const MyDirectXContext = struct {
         _ = self.game_rtv.IUnknown.Release();
         _ = self.game_srv.IUnknown.Release();
 
-        _ = self.blit_vertex_shader.IUnknown.Release();
-        _ = self.blit_pixel_shader.IUnknown.Release();
+        _ = self.font_rtv.IUnknown.Release();
+        _ = self.font_srv.IUnknown.Release();
 
         if (self.backbuffer_rtv) |backbuffer_rtv|
             _ = backbuffer_rtv.IUnknown.Release();
+
+        _ = self.blend_state.IUnknown.Release();
+
+        _ = self.blit_vertex_shader.IUnknown.Release();
+        _ = self.blit_pixel_shader.IUnknown.Release();
 
         _ = self.device.IUnknown.Release();
         _ = self.context.IUnknown.Release();
@@ -549,6 +561,43 @@ const MyDirectXContext = struct {
             .TopLeftY = 0.0,
         };
 
+        var font_tex_desc = D3D11_TEXTURE2D_DESC{
+            .Width = font_width,
+            .Height = font_height,
+            .MipLevels = 1,
+            .ArraySize = 1,
+            .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Usage = D3D11_USAGE_DEFAULT,
+            .BindFlags = .{ .RENDER_TARGET = 1, .SHADER_RESOURCE = 1 },
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+        };
+
+        var font_tex: *ID3D11Texture2D = undefined;
+        hr = device.CreateTexture2D(&font_tex_desc, null, @ptrCast(&font_tex));
+        if (hr != HRESULT.S_OK) return error.CreateFontTextureFailed;
+        defer _ = font_tex.IUnknown.Release();
+
+        var font_rtv: *ID3D11RenderTargetView = undefined;
+        hr = device.CreateRenderTargetView(@ptrCast(font_tex), null, @ptrCast(&font_rtv));
+        if (hr != HRESULT.S_OK) return error.CreateFontRTVFailed;
+        errdefer _ = font_rtv.IUnknown.Release();
+
+        var font_srv: *ID3D11ShaderResourceView = undefined;
+        hr = device.CreateShaderResourceView(@ptrCast(font_tex), null, @ptrCast(&font_srv));
+        if (hr != HRESULT.S_OK) return error.CreateFontSRVFailed;
+        errdefer _ = font_srv.IUnknown.Release();
+
+        const font_viewport = D3D11_VIEWPORT{
+            .Width = font_width,
+            .Height = font_height,
+            .MinDepth = 0.0,
+            .MaxDepth = 1.0,
+            .TopLeftX = 0.0,
+            .TopLeftY = 0.0,
+        };
+
         var sampler_desc = D3D11_SAMPLER_DESC{
             .Filter = D3D11_FILTER_MIN_MAG_MIP_POINT,
             .AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -593,18 +642,44 @@ const MyDirectXContext = struct {
         errdefer _ = blit_pixel_shader.IUnknown.Release();
 
         const letterbox_color = [4]f32{ 0.0, 0.0, 0.0, 1.0 }; // black bars
-        const null_srv: ?*ID3D11ShaderResourceView = null;
 
         const world_clear_color = [4]f32{ 0.10, 0.10, 0.35, 1.0 }; // dark blue
+        const font_clear_color = [4]f32{ 1.0, 0.0, 0.0, 0.0 }; // transparent
+
+        var blend_desc = D3D11_BLEND_DESC{
+            .AlphaToCoverageEnable = FALSE,
+            .IndependentBlendEnable = FALSE,
+            .RenderTarget = undefined,
+        };
+
+        blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC{
+            .BlendEnable = TRUE,
+            .SrcBlend = D3D11_BLEND_SRC_ALPHA,
+            .DestBlend = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOp = D3D11_BLEND_OP_ADD,
+            .SrcBlendAlpha = D3D11_BLEND_ONE,
+            .DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA,
+            .BlendOpAlpha = D3D11_BLEND_OP_ADD,
+            .RenderTargetWriteMask = @intFromEnum(D3D11_COLOR_WRITE_ENABLE_ALL),
+        };
+
+        var blend_state: *ID3D11BlendState = undefined;
+        hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
+        if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
+        errdefer _ = blend_state.IUnknown.Release();
 
         return .{
             .game_viewport = game_viewport,
-            .letterbox_color = letterbox_color,
-            .null_srv = null_srv,
+            .font_viewport = font_viewport,
 
+            .letterbox_color = letterbox_color,
+
+            .blend_state = blend_state,
             .world_clear_color = world_clear_color,
+            .font_clear_color = font_clear_color,
 
             .game_srv = game_srv,
+            .font_srv = font_srv,
 
             .sampler = sampler,
             .cbuffer = cbuffer,
@@ -616,6 +691,7 @@ const MyDirectXContext = struct {
 
             .backbuffer_rtv = backbuffer_rtv,
             .game_rtv = game_rtv,
+            .font_rtv = font_rtv,
 
             .context = context,
             .device = device,
@@ -675,7 +751,7 @@ const MyDirectXContext = struct {
         return .{ .Width = rgbaImage.width, .Height = rgbaImage.height, .Srv = Srv };
     }
 
-    fn beginPass1(self: *Self, camera: Camera) !void {
+    pub fn beginPass1(self: *Self, camera: Camera) !void {
         // --- Pass 1: render the world into the fixed-size game target ---
         var raw_rtvs = [_]?*ID3D11RenderTargetView{self.game_rtv};
         const rtvs: ?[*]?*ID3D11RenderTargetView = &raw_rtvs;
@@ -690,7 +766,7 @@ const MyDirectXContext = struct {
         try self.SetCBuffer(camera);
     }
 
-    fn drawPass2(self: *Self) void {
+    fn drawBlitPass(self: *Self, game_srv: *ID3D11ShaderResourceView) void {
         var client_rect: RECT = undefined;
         _ = GetClientRect(self.hwnd, &client_rect);
         const win_w = client_rect.right - client_rect.left;
@@ -699,12 +775,11 @@ const MyDirectXContext = struct {
 
         // -- Pass 2: blit game target onto the backbuffer, integer-scaled
         // centered, with black bars for whatever doesn't divide evenly ---
-        self.context.OMSetBlendState(null, null, 0xffffffff);
 
         var raw_backbuffer_rtvs = [_]?*ID3D11RenderTargetView{self.backbuffer_rtv};
         const backbuffer_rtvs: ?[*]?*ID3D11RenderTargetView = &raw_backbuffer_rtvs;
         self.context.OMSetRenderTargets(1, backbuffer_rtvs, null);
-        self.context.ClearRenderTargetView(self.backbuffer_rtv, @ptrCast(&self.letterbox_color[0]));
+        //self.context.ClearRenderTargetView(self.backbuffer_rtv, @ptrCast(&self.letterbox_color[0]));
 
         const win_w_f: f32 = @floatFromInt(win_w);
         const win_h_f: f32 = @floatFromInt(win_h);
@@ -735,16 +810,42 @@ const MyDirectXContext = struct {
         self.context.VSSetShader(self.blit_vertex_shader, null, 0);
         self.context.PSSetShader(self.blit_pixel_shader, null, 0);
 
-        var raw_srv = [_]?*ID3D11ShaderResourceView{self.game_srv};
+        var raw_srv = [_]?*ID3D11ShaderResourceView{game_srv};
         const game_srvs: ?[*]?*ID3D11ShaderResourceView = &raw_srv;
         self.context.PSSetShaderResources(0, 1, game_srvs);
 
         self.context.Draw(3, 0);
+    }
 
+    pub fn beginPass3(self: *Self, camera: Camera) !void {
+        // --- Pass 3: render the fonts into the fixed-size 1920x1080 font target ---
+        var raw_rtvs = [_]?*ID3D11RenderTargetView{self.font_rtv};
+        const rtvs: ?[*]?*ID3D11RenderTargetView = &raw_rtvs;
+        self.context.OMSetRenderTargets(1, rtvs, null);
+        self.context.RSSetViewports(1, @ptrCast(&self.font_viewport));
+        self.context.ClearRenderTargetView(self.font_rtv, @ptrCast(&self.font_clear_color[0]));
+
+        _ = camera;
+        //try self.SetCBuffer(camera);
+    }
+
+    pub fn drawPass2(self: *Self) void {
+        self.context.OMSetBlendState(null, null, 0xffffffff);
+        self.drawBlitPass(self.game_srv);
+    }
+
+    pub fn drawPass3(self: *Self) void {
+        const blendFactor: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 };
+        const sampleMask = 0xffffffff;
+        self.context.OMSetBlendState(self.blend_state, @ptrCast(&blendFactor), sampleMask);
+        self.drawBlitPass(self.font_srv);
+    }
+
+    pub fn endPass3(self: *Self) void {
         // Unbind the SRV so game_tex is free to be used as a render target
         // again next frame -- a resource can't be bound as both at once.
 
-        var null_srv = [_]?*ID3D11ShaderResourceView{self.null_srv};
+        var null_srv = [_]?*ID3D11ShaderResourceView{null};
         const null_srvs: ?[*]?*ID3D11ShaderResourceView = &null_srv;
         self.context.PSSetShaderResources(0, 1, null_srvs);
 
@@ -960,9 +1061,9 @@ pub const MyDebugDraw = struct {
     }
 
     pub fn flush(self: *Self) !void {
-        if (self.vertex_count == 0) return;
-
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
+
+        if (self.vertex_count == 0) return;
 
         const strides = &[_]u32{self.stride};
         const vb_offsets = &[_]u32{self.vb_offset};
@@ -1065,6 +1166,7 @@ pub const MyBatchDraw = struct {
 
     fn deinit(self: *Self) void {
         _ = self.input_layout.IUnknown.Release();
+
         _ = self.vertex_buffer.IUnknown.Release();
         _ = self.index_buffer.IUnknown.Release();
 
@@ -1115,8 +1217,8 @@ pub const MyBatchDraw = struct {
         hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
         if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
         errdefer _ = blend_state.IUnknown.Release();
-        // Shader additions
 
+        // Shader additions
         var vertex_shader: *ID3D11VertexShader = undefined;
         hr = device.CreateVertexShader(vs_bytecode, vs_bytecode.len, null, @ptrCast(&vertex_shader));
         if (hr != HRESULT.S_OK) return error.CreateVertexShaderFailed;
@@ -1310,17 +1412,6 @@ pub const MyBatchDraw = struct {
         const ndc_x1 = dest_rect.x + dest_rect.width;
         const ndc_y1 = dest_rect.y + dest_rect.height;
 
-        //const Last = struct {
-        //    var x: f32 = -1;
-        //    var y: f32 = -1;
-        //};
-
-        //if (Last.x != source_rect.y or Last.y != source_rect.height) {
-        //    Last.x = source_rect.y;
-        //    Last.y = source_rect.height;
-        //    std.debug.print("{d} {d} {d}\n", .{ source_rect.y, source_rect.height, texture.Width });
-        //}
-
         const quad_vertices = [_]Vertex{
             .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
             .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
@@ -1373,14 +1464,6 @@ pub const MyPlatform = struct {
             .debug = debug,
             .keyboard = keyboard,
         };
-    }
-
-    pub fn beginDraw(self: *Self, camera: Camera) !void {
-        try self.cx.beginPass1(camera);
-    }
-
-    pub fn endDraw(self: *Self) void {
-        self.cx.drawPass2();
     }
 
     pub fn peekMessages() bool {
