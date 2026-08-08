@@ -105,9 +105,9 @@ pub const MyGamePlatform = struct {
 
         return self.platform.cx.toggleFullscreen();
     }
-    fn beginDrawImpl(ctx: *anyopaque) void {
+    fn beginDrawImpl(ctx: *anyopaque, camera: Camera) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
-        return self.platform.beginDraw();
+        return self.platform.beginDraw(camera) catch unreachable;
     }
     fn endDrawImpl(ctx: *anyopaque) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
@@ -140,10 +140,10 @@ pub const MyGamePlatform = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         return self.platform.debug.beginBatch() catch unreachable;
     }
-    fn endDebugDrawImpl(ctx: *anyopaque, camera: Camera) void {
+    fn endDebugDrawImpl(ctx: *anyopaque) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        return self.platform.debug.flush(camera) catch unreachable;
+        return self.platform.debug.flush() catch unreachable;
     }
 
     fn beginSpriteDrawImpl(ctx: *anyopaque) void {

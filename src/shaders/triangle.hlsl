@@ -13,10 +13,14 @@ struct PSInput
     float2 uv : TEXCOORD0;
 };
 
+cbuffer CameraBuffer : register(b0) {
+    matrix view_projection;
+};
+
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-    output.pos = float4(input.pos, 1.0);
+    output.pos = mul(view_projection, float4(input.pos, 1.0));
     output.uv = input.uv;
     return output;
 }

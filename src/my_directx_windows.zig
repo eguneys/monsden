@@ -411,6 +411,7 @@ const MyDirectXContext = struct {
     game_srv: *ID3D11ShaderResourceView,
 
     sampler: *ID3D11SamplerState,
+    cbuffer: *ID3D11Buffer,
 
     hwnd: HWND,
 
@@ -427,6 +428,7 @@ const MyDirectXContext = struct {
         self.context.ClearState();
 
         _ = self.sampler.IUnknown.Release();
+        _ = self.cbuffer.IUnknown.Release();
 
         _ = self.game_rtv.IUnknown.Release();
         _ = self.game_srv.IUnknown.Release();
@@ -565,6 +567,20 @@ const MyDirectXContext = struct {
         if (hr != HRESULT.S_OK) return error.CreateSamplerFailed;
         errdefer _ = sampler.IUnknown.Release();
 
+        const cbuffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(CameraConstants),
+            .Usage = .DYNAMIC,
+            .BindFlags = .{ .CONSTANT_BUFFER = 1 },
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var cbuffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&cbuffer_desc, null, @ptrCast(&cbuffer));
+        if (hr != HRESULT.S_OK) return error.CreateCBufferFailed;
+        errdefer _ = cbuffer.IUnknown.Release();
+
         // --- Blit Shaders (fullscreen triangle, no vertex buffer needed) ---
         var blit_vertex_shader: *ID3D11VertexShader = undefined;
         hr = device.CreateVertexShader(blit_vs_bytecode, blit_vs_bytecode.len, null, @ptrCast(&blit_vertex_shader));
@@ -591,6 +607,7 @@ const MyDirectXContext = struct {
             .game_srv = game_srv,
 
             .sampler = sampler,
+            .cbuffer = cbuffer,
 
             .blit_vertex_shader = blit_vertex_shader,
             .blit_pixel_shader = blit_pixel_shader,
@@ -604,6 +621,25 @@ const MyDirectXContext = struct {
             .device = device,
             .swap_chain = swap_chain,
         };
+    }
+
+    fn SetCBuffer(self: Self, camera: Camera) !void {
+        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
+        const hr = self.context.Map(
+            @ptrCast(self.cbuffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        const dest: *CameraConstants = @ptrCast(@alignCast(mapped.pData));
+        dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(game_width, game_height) };
+        self.context.Unmap(@ptrCast(self.cbuffer), 0);
+
+        var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
+        //const pp_cbuffer: ?[*]?*ID3D11SamplerState = &pp_raw_c_buffer;
+        self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
     }
 
     fn CreateMyTexture(self: *Self, rgbaImage: png.RGBAImage) !MyTexture {
@@ -639,7 +675,7 @@ const MyDirectXContext = struct {
         return .{ .Width = rgbaImage.width, .Height = rgbaImage.height, .Srv = Srv };
     }
 
-    fn beginPass1(self: *Self) void {
+    fn beginPass1(self: *Self, camera: Camera) !void {
         // --- Pass 1: render the world into the fixed-size game target ---
         var raw_rtvs = [_]?*ID3D11RenderTargetView{self.game_rtv};
         const rtvs: ?[*]?*ID3D11RenderTargetView = &raw_rtvs;
@@ -650,6 +686,8 @@ const MyDirectXContext = struct {
         var raw_sampler2 = [_]?*ID3D11SamplerState{self.sampler};
         const samplers2: ?[*]?*ID3D11SamplerState = &raw_sampler2;
         self.context.PSSetSamplers(0, 1, samplers2);
+
+        try self.SetCBuffer(camera);
     }
 
     fn drawPass2(self: *Self) void {
@@ -821,7 +859,6 @@ pub const MyDebugDraw = struct {
     context: *ID3D11DeviceContext,
 
     vertex_buffer: *ID3D11Buffer,
-    cbuffer: *ID3D11Buffer,
 
     stride: u32 = @sizeOf(DebugVertex),
     vb_offset: u32 = 0,
@@ -836,7 +873,6 @@ pub const MyDebugDraw = struct {
 
     fn deinit(self: *Self) void {
         _ = self.vertex_buffer.IUnknown.Release();
-        _ = self.cbuffer.IUnknown.Release();
 
         _ = self.debug_vs.IUnknown.Release();
         _ = self.debug_ps.IUnknown.Release();
@@ -855,20 +891,6 @@ pub const MyDebugDraw = struct {
         hr = device.CreatePixelShader(debug_ps_bytecode, debug_ps_bytecode.len, null, @ptrCast(&debug_pixel_shader));
         if (hr != HRESULT.S_OK) return error.CreateDebugPixelShaderFailed;
         errdefer _ = debug_pixel_shader.IUnknown.Release();
-
-        const cbuffer_desc = D3D11_BUFFER_DESC{
-            .ByteWidth = @sizeOf(CameraConstants),
-            .Usage = .DYNAMIC,
-            .BindFlags = .{ .CONSTANT_BUFFER = 1 },
-            .CPUAccessFlags = .{ .WRITE = 1 },
-            .MiscFlags = .{},
-            .StructureByteStride = 0,
-        };
-
-        var cbuffer: *ID3D11Buffer = undefined;
-        hr = device.CreateBuffer(&cbuffer_desc, null, @ptrCast(&cbuffer));
-        if (hr != HRESULT.S_OK) return error.CreateCBufferFailed;
-        errdefer _ = cbuffer.IUnknown.Release();
 
         var vertex_desc = D3D11_BUFFER_DESC{
             .ByteWidth = @sizeOf(DebugVertex) * 4 * MAX_SPRITES_PER_BATCH,
@@ -918,31 +940,11 @@ pub const MyDebugDraw = struct {
 
         return .{
             .vertex_buffer = vertex_buffer,
-            .cbuffer = cbuffer,
             .context = context,
             .debug_vs = debug_vertex_shader,
             .debug_ps = debug_pixel_shader,
             .input_layout = input_layout,
         };
-    }
-
-    fn SetCBuffer(self: Self, camera: Camera) !void {
-        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
-        const hr = self.context.Map(
-            @ptrCast(self.cbuffer),
-            0,
-            D3D11_MAP_WRITE_DISCARD,
-            0,
-            &mapped,
-        );
-        if (hr != HRESULT.S_OK) return error.MapFailed;
-        const dest: *CameraConstants = @ptrCast(@alignCast(mapped.pData));
-        dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(game_width, game_height) };
-        self.context.Unmap(@ptrCast(self.cbuffer), 0);
-
-        var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
-        //const pp_cbuffer: ?[*]?*ID3D11SamplerState = &pp_raw_c_buffer;
-        self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
     }
 
     pub fn beginBatch(self: *Self) !void {
@@ -957,7 +959,7 @@ pub const MyDebugDraw = struct {
         self.vertex_count = 0;
     }
 
-    pub fn flush(self: *Self, camera: Camera) !void {
+    pub fn flush(self: *Self) !void {
         if (self.vertex_count == 0) return;
 
         self.context.Unmap(@ptrCast(self.vertex_buffer), 0);
@@ -971,8 +973,6 @@ pub const MyDebugDraw = struct {
 
         self.context.VSSetShader(self.debug_vs, null, 0);
         self.context.PSSetShader(self.debug_ps, null, 0);
-
-        try self.SetCBuffer(camera);
 
         self.context.Draw(self.vertex_count, 0);
 
@@ -1115,7 +1115,6 @@ pub const MyBatchDraw = struct {
         hr = device.CreateBlendState(&blend_desc, @ptrCast(&blend_state));
         if (hr != HRESULT.S_OK) return error.CreateBlendStateFailed;
         errdefer _ = blend_state.IUnknown.Release();
-
         // Shader additions
 
         var vertex_shader: *ID3D11VertexShader = undefined;
@@ -1306,10 +1305,10 @@ pub const MyBatchDraw = struct {
         const v1 = (source_rect.y + source_rect.height) / @as(f32, @floatFromInt(texture.Height));
 
         //dest rect
-        const ndc_x0 = (dest_rect.x / game_width) * 2.0 - 1.0;
-        const ndc_y0 = 1.0 - (dest_rect.y / game_height) * 2.0; // y flips
-        const ndc_x1 = ((dest_rect.x + dest_rect.width) / game_width) * 2.0 - 1.0;
-        const ndc_y1 = 1.0 - ((dest_rect.y + dest_rect.height) / game_height) * 2.0;
+        const ndc_x0 = dest_rect.x;
+        const ndc_y0 = dest_rect.y;
+        const ndc_x1 = dest_rect.x + dest_rect.width;
+        const ndc_y1 = dest_rect.y + dest_rect.height;
 
         //const Last = struct {
         //    var x: f32 = -1;
@@ -1376,8 +1375,8 @@ pub const MyPlatform = struct {
         };
     }
 
-    pub fn beginDraw(self: *Self) void {
-        self.cx.beginPass1();
+    pub fn beginDraw(self: *Self, camera: Camera) !void {
+        try self.cx.beginPass1(camera);
     }
 
     pub fn endDraw(self: *Self) void {

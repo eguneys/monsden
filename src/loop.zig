@@ -43,7 +43,7 @@ pub const GamePlatform = struct {
     pub const VTable = struct {
         peekMessages: *const fn (ctx: *anyopaque) bool,
         toggleFullscreen: *const fn (ctx: *anyopaque) void,
-        beginDraw: *const fn (ctx: *anyopaque) void,
+        beginDraw: *const fn (ctx: *anyopaque, camera: Camera) void,
         endDraw: *const fn (ctx: *anyopaque) void,
         onResize: *const fn (ctx: *anyopaque, new_width: u32, new_height: u32) void,
         deinit: *const fn (ctx: *anyopaque) void,
@@ -51,7 +51,7 @@ pub const GamePlatform = struct {
         debugBatch: *const fn (ctx: *anyopaque) DebugBatch,
 
         beginDebugDraw: *const fn (ctx: *anyopaque) void,
-        endDebugDraw: *const fn (ctx: *anyopaque, camera: Camera) void,
+        endDebugDraw: *const fn (ctx: *anyopaque) void,
 
         beginSpriteDraw: *const fn (ctx: *anyopaque) void,
         endSpriteDraw: *const fn (ctx: *anyopaque) void,
@@ -89,8 +89,8 @@ pub const GamePlatform = struct {
         self.vtable.toggleFullscreen(self.ptr);
     }
 
-    pub fn beginDraw(self: *Self) void {
-        self.vtable.beginDraw(self.ptr);
+    pub fn beginDraw(self: *Self, camera: Camera) void {
+        self.vtable.beginDraw(self.ptr, camera);
     }
 
     pub fn endDraw(self: *Self) void {
@@ -109,8 +109,8 @@ pub const GamePlatform = struct {
         self.vtable.beginDebugDraw(self.ptr);
     }
 
-    pub fn endDebugDraw(self: *Self, camera: Camera) void {
-        self.vtable.endDebugDraw(self.ptr, camera);
+    pub fn endDebugDraw(self: *Self) void {
+        self.vtable.endDebugDraw(self.ptr);
     }
 
     pub fn onResize(self: *Self, new_width: u32, new_height: u32) void {
@@ -179,7 +179,7 @@ pub const GameManager = struct {
     }
 
     pub fn render(self: *Self, alpha: f32) void {
-        self.platform.beginDraw();
+        self.platform.beginDraw(self.scene.camera);
 
         self.platform.beginSpriteDraw();
         scn.renderScene(self.platform.spriteBatch(), &self.scene, alpha);
@@ -187,7 +187,7 @@ pub const GameManager = struct {
 
         self.platform.beginDebugDraw();
         scn.renderDebug(self.platform.debugBatch(), &self.scene);
-        self.platform.endDebugDraw(self.scene.camera);
+        self.platform.endDebugDraw();
 
         self.platform.endDraw();
     }
