@@ -150,11 +150,13 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         var context: MyDirectXContext = try .init(hwndV);
         const resources: MyTextureResources = try .init(io, allocator, &context);
 
-        var fontRasterizer = try MyFontAtlasRasterizer.buildAtlas(io, allocator);
-        defer fontRasterizer.deinit();
-
         var batch: MyBatchDraw = try .init(context.device, context.context);
         var debug: MyDebugDraw = try .init(context.device, context.context);
+
+        var fontRasterizer: MyFontAtlasRasterizer = try .init(context.device, context.context);
+        defer fontRasterizer.deinit();
+
+        try fontRasterizer.buildAtlas(io, allocator);
 
         var keyboard: KeyboardState = .init();
         const platform: MyPlatform = .init(
@@ -1834,20 +1836,58 @@ const MyTextureResources = struct {
     }
 };
 
+const D3D11_BOX = win32.graphics.direct3d11.D3D11_BOX;
+
 const ShelfPack = @import("shelf_pack.zig");
 const MyFontAtlasRasterizer = struct {
     atlas_table: [All_Glyphs.len]GlyphEntry = undefined,
+
+    context: *ID3D11DeviceContext,
+    atlas_tex: *ID3D11Texture2D,
+    atlas_srv: *ID3D11ShaderResourceView,
 
     const Atlas_Size: usize = 2048;
 
     const All_Glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-    fn deinit(self: @This()) void {
+    const Self = @This();
+    fn deinit(self: *Self) void {
         _ = self;
     }
 
-    fn buildAtlas(io: std.Io, allocator: Allocator) !MyFontAtlasRasterizer {
-        var atlas_table: [All_Glyphs.len]GlyphEntry = undefined;
+    fn init(device: *ID3D11Device, context: *ID3D11DeviceContext) !Self {
+        var atlas_desc = D3D11_TEXTURE2D_DESC{
+            .Width = Atlas_Size,
+            .Height = Atlas_Size,
+            .MipLevels = 1,
+            .ArraySize = 1,
+            .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .SampleDesc = .{ .Count = 1, .Quality = 0 },
+            .Usage = D3D11_USAGE_DEFAULT,
+            .BindFlags = .{ .SHADER_RESOURCE = 1 },
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+        };
+
+        var atlas_tex: *ID3D11Texture2D = undefined;
+        var hr = device.CreateTexture2D(&atlas_desc, null, @ptrCast(&atlas_tex));
+        if (hr != HRESULT.S_OK) return error.CreateGameTextureFailed;
+        errdefer _ = atlas_tex.IUnknown.Release();
+
+        var atlas_srv: *ID3D11ShaderResourceView = undefined;
+        hr = device.CreateShaderResourceView(@ptrCast(atlas_tex), null, @ptrCast(&atlas_srv));
+        if (hr != HRESULT.S_OK) return error.CreateGameSRVFailed;
+        errdefer _ = atlas_srv.IUnknown.Release();
+
+        return .{
+            .atlas_table = undefined,
+            .context = context,
+            .atlas_tex = atlas_tex,
+            .atlas_srv = atlas_srv,
+        };
+    }
+
+    fn buildAtlas(self: *Self, io: std.Io, allocator: Allocator) !void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const exePath = try MyAssetsPathLocator.executableDirPath(io, &buf);
 
@@ -1871,8 +1911,8 @@ const MyFontAtlasRasterizer = struct {
         }
         var glyph_indices: [All_Glyphs.len]u16 = undefined;
         var advances: [All_Glyphs.len]f32 = undefined;
-        var bearings_x: [All_Glyphs.len]i32 = undefined;
-        var bearings_y: [All_Glyphs.len]i32 = undefined;
+        var bearings_x: [All_Glyphs.len]f32 = undefined;
+        var bearings_y: [All_Glyphs.len]f32 = undefined;
 
         try font_Factory.GetGlyphIndices(font_size_px, &code_points, &glyph_indices, &advances, &bearings_x, &bearings_y);
 
@@ -1887,22 +1927,38 @@ const MyFontAtlasRasterizer = struct {
             defer allocator.free(glyphImage.buf);
             const xy = packer.allocate(glyphImage.w, glyphImage.h) orelse return error.IncreaseFontAtlasSize;
 
-            atlas_table[i] = .{
+            self.uploadGlyph(.{ .x = @floatFromInt(xy.x), .y = @floatFromInt(xy.y), .width = @floatFromInt(glyphImage.w), .height = @floatFromInt(glyphImage.h) }, glyphImage.buf);
+
+            self.atlas_table[i] = .{
                 .uv_rect = .{
                     @as(f32, @floatFromInt(xy.x)),
                     @as(f32, @floatFromInt(xy.y)),
                     @as(f32, @floatFromInt(xy.x + glyphImage.w)),
                     @as(f32, @floatFromInt(xy.y + glyphImage.h)),
                 },
-                .bearing_x = @as(f32, @floatFromInt(bearings_x[i])),
-                .bearing_y = @as(f32, @floatFromInt(bearings_y[i])),
+                .bearing_x = bearings_x[i],
+                .bearing_y = bearings_y[i],
                 .width = glyphImage.w,
                 .height = glyphImage.h,
                 .advance = advances[i],
             };
         }
+    }
 
-        return .{ .atlas_table = atlas_table };
+    fn uploadGlyph(self: *Self, rect: Rect, buf: []const u8) void {
+        var box = D3D11_BOX{
+            .left = @intFromFloat(rect.x),
+            .top = @intFromFloat(rect.y),
+            .right = @intFromFloat(rect.x + rect.width),
+            .bottom = @intFromFloat(rect.y + rect.height),
+            .front = 0,
+            .back = 0,
+        };
+        self.context.UpdateSubresource(@ptrCast(self.atlas_tex), 0, &box, buf.ptr, @intFromFloat(rect.width), 0);
+    }
+
+    fn bindForDrawing(self: *Self) void {
+        self.context.PSSetShaderResources(0, 1, @ptrCast(&self.atlas_srv));
     }
 };
 

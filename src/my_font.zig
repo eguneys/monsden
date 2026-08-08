@@ -98,7 +98,6 @@ pub const MyFontFactory = struct {
         hr = analysis.?.GetAlphaTextureBounds(.ALIASED_1x1, &bounds);
         if (hr != HRESULT.S_OK) return error.FailedGetAlphaTextureBounds;
 
-        std.debug.print("{d} {}", .{ glyph_index, bounds });
         if (bounds.left >= bounds.right or bounds.top >= bounds.bottom) {
             return .{
                 .buf = try allocator.alloc(u8, 0),
@@ -124,7 +123,7 @@ pub const MyFontFactory = struct {
         return .{ .buf = buf, .w = w, .h = h };
     }
 
-    pub fn GetGlyphIndices(self: *Self, font_size_px: f32, codepoints: []const u32, glyph_indices: []u16, advances: []f32, bearings_x: []i32, bearings_y: []i32) !void {
+    pub fn GetGlyphIndices(self: *Self, font_size_px: f32, codepoints: []const u32, glyph_indices: []u16, advances: []f32, bearings_x: []f32, bearings_y: []f32) !void {
         var hr = self.font_face.GetGlyphIndices(
             codepoints.ptr,
             @intCast(codepoints.len),
@@ -148,8 +147,8 @@ pub const MyFontFactory = struct {
 
         for (0..codepoints.len) |i| {
             advances[i] = @as(f32, @floatFromInt(design_metrics[i].advanceWidth)) * scale;
-            bearings_x[i] = design_metrics[i].leftSideBearing;
-            bearings_y[i] = design_metrics[i].topSideBearing;
+            bearings_x[i] = @as(f32, @floatFromInt(design_metrics[i].leftSideBearing)) * scale;
+            bearings_y[i] = @as(f32, @floatFromInt(design_metrics[i].topSideBearing)) * scale;
         }
     }
 };
