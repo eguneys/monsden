@@ -1456,6 +1456,9 @@ pub const MyBatchDraw = struct {
     }
 };
 
+const DXGI_FORMAT_R8_UNORM = win32.graphics.dxgi.common.DXGI_FORMAT_R8_UNORM;
+const D3D11_APPEND_ALIGNED_ELEMENT = win32.graphics.direct3d11.D3D11_APPEND_ALIGNED_ELEMENT;
+
 const FontVertex = extern struct {
     pos: [3]f32,
     uv: [2]f32,
@@ -1562,7 +1565,8 @@ pub const MyFontBatch = struct {
                 .SemanticIndex = 0,
                 .Format = DXGI_FORMAT_R32G32_FLOAT,
                 .InputSlot = 0,
-                .AlignedByteOffset = 12, // 3 floats * 4 bytes = offset past pos
+                //.AlignedByteOffset = 12, // 3 floats * 4 bytes = offset past pos
+                .AlignedByteOffset = D3D11_APPEND_ALIGNED_ELEMENT,
                 .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
                 .InstanceDataStepRate = 0,
             },
@@ -1571,7 +1575,8 @@ pub const MyFontBatch = struct {
                 .SemanticIndex = 0,
                 .Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
                 .InputSlot = 0,
-                .AlignedByteOffset = 12 + 8, // 12 + 2 floats * 4 bytes = offset past pos
+                //.AlignedByteOffset = 12 + 8, // 12 + 2 floats * 4 bytes = offset past pos
+                .AlignedByteOffset = D3D11_APPEND_ALIGNED_ELEMENT,
                 .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
                 .InstanceDataStepRate = 0,
             },
@@ -1716,7 +1721,7 @@ pub const MyFontBatch = struct {
         self.sprite_count = 0;
     }
 
-    pub fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect) !void {
+    fn drawSprite(self: *Self, texture: *MyTexture, source_rect: Rect, dest_rect: Rect, color: [4]f32) !void {
         if (self.sprite_count == MAX_SPRITES_PER_BATCH) {
             try self.flush();
         }
@@ -1725,7 +1730,7 @@ pub const MyFontBatch = struct {
         }
         self.current_texture = texture;
 
-        const dst: [*]Vertex = @ptrCast(@alignCast(self.mapped.pData));
+        const dst: [*]FontVertex = @ptrCast(@alignCast(self.mapped.pData));
 
         // source rect
         const _u0 = source_rect.x / @as(f32, @floatFromInt(texture.Width));
@@ -1739,11 +1744,11 @@ pub const MyFontBatch = struct {
         const ndc_x1 = dest_rect.x + dest_rect.width;
         const ndc_y1 = dest_rect.y + dest_rect.height;
 
-        const quad_vertices = [_]Vertex{
-            .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 } }, // top-left
-            .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 } }, //top-right
-            .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 } }, //bottom-right
-            .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 } }, //bottom-left
+        const quad_vertices = [_]FontVertex{
+            .{ .pos = .{ ndc_x0, ndc_y0, 0.0 }, .uv = .{ _u0, v0 }, .color = color }, // top-left
+            .{ .pos = .{ ndc_x1, ndc_y0, 0.0 }, .uv = .{ _u1, v0 }, .color = color }, //top-right
+            .{ .pos = .{ ndc_x1, ndc_y1, 0.0 }, .uv = .{ _u1, v1 }, .color = color }, //bottom-right
+            .{ .pos = .{ ndc_x0, ndc_y1, 0.0 }, .uv = .{ _u0, v1 }, .color = color }, //bottom-left
         };
 
         const base = self.sprite_count * 4;
@@ -1754,6 +1759,23 @@ pub const MyFontBatch = struct {
         dst[base + 3] = quad_vertices[3];
 
         self.sprite_count += 1;
+    }
+
+    pub fn drawText(self: *Self, texture: *MyTexture, atlas_table: []GlyphEntry, x: f32, y: f32, text: []const u8, color: [4]f32) !void {
+        var pen_x: f32 = x;
+        const pen_y: f32 = y;
+
+        for (text) |c| {
+            const i = std.mem.indexOfScalar(u8, MyFontAtlasRasterizer.All_Glyphs, c) orelse return error.MissingCharacter;
+            const glyph = atlas_table[i];
+
+            const dest_rect: Rect = .{ .x = pen_x + glyph.bearing_x, .y = pen_y + glyph.bearing_y, .width = @floatFromInt(glyph.width), .height = @floatFromInt(glyph.height) };
+            const source_rect: Rect = .{ .x = glyph.uv_rect[0], .y = glyph.uv_rect[1], .width = glyph.uv_rect[2] - glyph.uv_rect[0], .height = glyph.uv_rect[3] - glyph.uv_rect[1] };
+
+            try self.drawSprite(texture, source_rect, dest_rect, color);
+
+            pen_x += glyph.advance;
+        }
     }
 };
 
@@ -1816,12 +1838,15 @@ const MyTextureResources = struct {
     texSprites: MyTexture,
     texBackground: MyTexture,
     texFontAtlas: MyTexture,
+    fontRasterizer: MyFontAtlasRasterizer,
 
     const Self = @This();
 
     fn deinit(self: *Self) void {
         self.texSprites.deinit();
         self.texBackground.deinit();
+        self.texFontAtlas.deinit();
+        self.fontRasterizer.deinit();
     }
 
     fn init(io: std.Io, allocator: Allocator, cx: *MyDirectXContext) !Self {
@@ -1850,11 +1875,11 @@ const MyTextureResources = struct {
         const bgRGBA = try mywic_factory.png(bgPngU16, &pngBuf2);
 
         var fontRasterizer: MyFontAtlasRasterizer = try .init(cx.device, cx.context);
-        defer fontRasterizer.deinit();
 
         const texFontAtlas = try fontRasterizer.buildAtlas(io, allocator);
 
         return .{
+            .fontRasterizer = fontRasterizer,
             .texSprites = try cx.CreateMyTexture(spritesRGBA),
             .texBackground = try cx.CreateMyTexture(bgRGBA),
             .texFontAtlas = texFontAtlas,
@@ -1874,7 +1899,7 @@ const MyFontAtlasRasterizer = struct {
 
     const Atlas_Size: usize = 2048;
 
-    const All_Glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const All_Glyphs = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     const Self = @This();
     fn deinit(self: *Self) void {
@@ -1887,7 +1912,7 @@ const MyFontAtlasRasterizer = struct {
             .Height = Atlas_Size,
             .MipLevels = 1,
             .ArraySize = 1,
-            .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .Format = DXGI_FORMAT_R8_UNORM,
             .SampleDesc = .{ .Count = 1, .Quality = 0 },
             .Usage = D3D11_USAGE_DEFAULT,
             .BindFlags = .{ .SHADER_RESOURCE = 1 },
@@ -1896,14 +1921,9 @@ const MyFontAtlasRasterizer = struct {
         };
 
         var atlas_tex: *ID3D11Texture2D = undefined;
-        var hr = device.CreateTexture2D(&atlas_desc, null, @ptrCast(&atlas_tex));
+        const hr = device.CreateTexture2D(&atlas_desc, null, @ptrCast(&atlas_tex));
         if (hr != HRESULT.S_OK) return error.CreateGameTextureFailed;
         errdefer _ = atlas_tex.IUnknown.Release();
-
-        var atlas_srv: *ID3D11ShaderResourceView = undefined;
-        hr = device.CreateShaderResourceView(@ptrCast(atlas_tex), null, @ptrCast(&atlas_srv));
-        if (hr != HRESULT.S_OK) return error.CreateGameSRVFailed;
-        errdefer _ = atlas_srv.IUnknown.Release();
 
         return .{
             .atlas_table = undefined,
@@ -1980,13 +2000,10 @@ const MyFontAtlasRasterizer = struct {
             .right = @intFromFloat(rect.x + rect.width),
             .bottom = @intFromFloat(rect.y + rect.height),
             .front = 0,
-            .back = 0,
+            .back = 1,
         };
-        _ = self;
-        _ = box;
-        _ = buf;
 
-        //self.context.UpdateSubresource(@ptrCast(self.atlas_tex), 0, &box, buf.ptr, @intFromFloat(rect.width), 0);
+        self.context.UpdateSubresource(@ptrCast(self.atlas_tex), 0, &box, buf.ptr, @intFromFloat(rect.width), 0);
     }
 
     fn CreateTexture(self: *Self) !MyTexture {

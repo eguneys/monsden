@@ -26,10 +26,9 @@ pub const Scene = struct {
 pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
     _ = alpha;
     _ = scene;
-    //_ = batch;
 
-    //batch.draw_bg(0, 0, 32, 32, 5, 5, 10, 10);
-    batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
+    batch.draw_bg(0, 0, 64, 64, 0, 0, 1, 1);
+    //batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
     //scene.animation.dest.x = 0;
     //scene.animation.dest.y = 0;
     //anim.renderFramesAnimation(batch, &scene.animation);
@@ -63,5 +62,5 @@ pub fn renderHUD(batch: SpriteBatch, font: FontBatch, scene: *Scene) void {
     _ = batch;
     _ = scene;
 
-    font.draw_text(0, 0, "kjasdf");
+    font.draw_text(-1920 / 2, -1080 / 2, "Emre Guneyler");
 }

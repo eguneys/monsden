@@ -33,8 +33,8 @@ SamplerState samp : register(s0);
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    //return float4(1.0, 0.0, 0.0, 1.0);
-    //return tex0.Sample(samp0, input.uv);
+    //return float4(0.0, 1.0, 0.0, 1.0);
+    //return atlas_tex.Sample(samp, input.uv);
     float coverage = atlas_tex.Sample(samp, input.uv).r;
     return float4(input.color.rgb, input.color.a * coverage);
 }

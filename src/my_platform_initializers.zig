@@ -83,11 +83,9 @@ pub const MyFontBatch = struct {
     fn drawTextImpl(ctx: *anyopaque, x: f32, y: f32, text: []const u8) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        const source_rect: Rect = .{ .x = 0, .y = 0, .width = 100, .height = 100 };
-        const dest_rect: Rect = .{ .x = x, .y = y, .width = 100, .height = 100 };
-        _ = text;
+        const color: [4]f32 = .{ 0.0, 0.0, 0.0, 1.0 };
 
-        self.platform.font_batch.drawSprite(&self.platform.resources.texBackground, source_rect, dest_rect) catch unreachable;
+        self.platform.font_batch.drawText(&self.platform.resources.texFontAtlas, &self.platform.resources.fontRasterizer.atlas_table, x, y, text, color) catch unreachable;
     }
 
     const vtable = FontBatch.VTable{
