@@ -8,24 +8,22 @@ const anim = @import("anim.zig");
 
 const Camera = @import("camera.zig");
 
-pub const Scene = struct {
-    animation: anim.FramesAnimation,
-    camera: Camera,
+animation: anim.FramesAnimation,
+camera: Camera,
 
-    t: f32 = 0,
+t: f32 = 0,
 
-    const Self = @This();
-    pub fn init() Self {
-        const source_rect: math.Box = .init(0, 0, 32, 32);
-        const dest_rect: math.Box = .init(0, 0, 64, 64);
-        const frames = &[_]u8{ 0, 1, 2, 3, 4 };
-        return .{ .camera = .init(0, 0), .animation = .init(7.2, frames, source_rect, dest_rect) };
-    }
-};
+const Self = @This();
+pub fn init() Self {
+    const source_rect: math.Box = .init(0, 0, 32, 32);
+    const dest_rect: math.Box = .init(0, 0, 64, 64);
+    const frames = &[_]u8{ 0, 1, 2, 3, 4 };
+    return .{ .camera = .init(0, 0), .animation = .init(7.2, frames, source_rect, dest_rect) };
+}
 
-pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
+pub fn render(self: *Self, batch: SpriteBatch, alpha: f32) void {
     _ = alpha;
-    _ = scene;
+    _ = self;
 
     batch.draw_bg(0, 0, 64, 64, 0, 0, 1, 1);
     //batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
@@ -46,21 +44,22 @@ pub fn renderScene(batch: SpriteBatch, scene: *Scene, alpha: f32) void {
     //}
 }
 
-pub fn updateScene(scene: *Scene, dt: f64) void {
-    scene.t += @floatCast(dt);
-    anim.updateFramesAnimation(&scene.animation, dt);
+pub fn update(self: *Self, dt: f64) void {
+    self.t += @floatCast(dt);
+    anim.updateFramesAnimation(&self.animation, dt);
     //scene.camera.position[0] = @sin(scene.t) * 200;
     //scene.camera.zoom = @sin(scene.t) * 0.5;
 }
 
-pub fn renderDebug(debug: DebugBatch, scene: *Scene) void {
-    _ = scene;
+pub fn renderDebug(self: *Self, debug: DebugBatch) void {
+    _ = self;
     _ = debug;
 }
 
-pub fn renderHUD(batch: SpriteBatch, font: FontBatch, scene: *Scene) void {
+pub fn renderHUD(self: *Self, batch: SpriteBatch, font: FontBatch) void {
     _ = batch;
-    _ = scene;
+    _ = self;
 
-    font.draw_text(-1920 / 2, -1080 / 2, "Emre Guneyler");
+    _ = font;
+    //font.draw_text(-1920 / 2, -1080 / 2, "Emre Guneyler");
 }

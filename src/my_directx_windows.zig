@@ -336,6 +336,9 @@ const debug_ps_bytecode = @embedFile("shaders/debug_ps.cso");
 const font_vs_bytecode = @embedFile("shaders/font_vs.cso");
 const font_ps_bytecode = @embedFile("shaders/font_ps.cso");
 
+const parallax_vs_bytecode = @embedFile("shaders/parallax_vs.cso");
+const parallax_ps_bytecode = @embedFile("shaders/parallax_ps.cso");
+
 const ID3D11VertexShader = win32.graphics.direct3d11.ID3D11VertexShader;
 const ID3D11PixelShader = win32.graphics.direct3d11.ID3D11PixelShader;
 const D3D11_INPUT_ELEMENT_DESC = win32.graphics.direct3d11.D3D11_INPUT_ELEMENT_DESC;
@@ -2023,4 +2026,209 @@ pub const GlyphEntry = struct {
     width: u32,
     height: u32,
     advance: f32,
+};
+
+const TileVertex = extern struct {
+    pos: [2]f32,
+};
+
+const TileParams = extern struct {
+    atlas_rect: [4]f32,
+    tile_size_world: [2]f32,
+    parallax_factor: [2]f32,
+    camera_pos: [2]f32,
+    _pad: [2]f32,
+};
+
+const TileBackground = struct {
+    coverage: Rect,
+    atlas_rect_uv: [4]f32,
+    tile_size_world: [2]f32,
+    parallax_factor: [2]f32,
+};
+
+const ParallaxBackgroundRenderer = struct {
+    cbuffer: ID3D11Buffer,
+
+    context: *ID3D11DeviceContext,
+
+    const MaxBackgrounds: usize = 8;
+
+    const Self = @This();
+    pub fn init(device: *ID3D11Device, context: *ID3D11DeviceContext, backgrounds: []TileBackground) Self {
+        const cbuffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(TileParams),
+            .Usage = .DYNAMIC,
+            .BindFlags = .{ .CONSTANT_BUFFER = 1 },
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var cbuffer: *ID3D11Buffer = undefined;
+        var hr = device.CreateBuffer(&cbuffer_desc, null, @ptrCast(&cbuffer));
+        if (hr != HRESULT.S_OK) return error.CreateCBufferFailed;
+        errdefer _ = cbuffer.IUnknown.Release();
+
+        // Shader additions
+        var vertex_shader: *ID3D11VertexShader = undefined;
+        hr = device.CreateVertexShader(parallax_vs_bytecode, parallax_vs_bytecode.len, null, @ptrCast(&vertex_shader));
+        if (hr != HRESULT.S_OK) return error.CreateVertexShaderFailed;
+        errdefer _ = vertex_shader.IUnknown.Release();
+
+        var pixel_shader: *ID3D11PixelShader = undefined;
+        hr = device.CreatePixelShader(parallax_ps_bytecode, parallax_ps_bytecode.len, null, @ptrCast(&pixel_shader));
+        if (hr != HRESULT.S_OK) return error.CreatePixelShaderFailed;
+        errdefer _ = pixel_shader.IUnknown.Release();
+
+        const input_element_descs = [_]D3D11_INPUT_ELEMENT_DESC{
+            .{
+                .SemanticName = "POSITION",
+                .SemanticIndex = 0,
+                .Format = DXGI_FORMAT_R32G32_FLOAT,
+                .InputSlot = 0,
+                .AlignedByteOffset = 0,
+                .InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0,
+            },
+        };
+
+        var input_layout: *ID3D11InputLayout = undefined;
+        hr = device.CreateInputLayout(
+            &input_element_descs,
+            input_element_descs.len,
+            vs_bytecode,
+            vs_bytecode.len,
+            @ptrCast(&input_layout),
+        );
+        if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
+        errdefer _ = input_layout.IUnknown.Release();
+
+        var indices: [MaxBackgrounds * 6]u16 = undefined;
+        for (0..MaxBackgrounds) |i| {
+            const v: u16 = @intCast(i * 4);
+            const base = i * 6;
+            indices[base..][0..6].* = .{ v + 0, v + 1, v + 2, v + 0, v + 2, v + 3 };
+        }
+
+        var index_buf_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(@TypeOf(indices)),
+            .Usage = D3D11_USAGE_IMMUTABLE,
+            .BindFlags = D3D11_BIND_INDEX_BUFFER,
+            .CPUAccessFlags = .{},
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+        var ib_init = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = &indices,
+            .SysMemPitch = 0,
+            .SysMemSlicePitch = 0,
+        };
+
+        var index_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&index_buf_desc, &ib_init, @ptrCast(&index_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateIndexBufferFailed;
+        errdefer _ = index_buffer.IUnknown.Release();
+
+        var all_vertices: [MaxBackgrounds * 4]TileVertex = undefined;
+
+        for (backgrounds, 0..) |bg, i| {
+            all_vertices[i * 4 + 0] = .{ .world_pos = .{ bg.coverage.x0, bg.coverage.y0 } }; // top-left
+            all_vertices[i * 4 + 1] = .{ .world_pos = .{ bg.coverage.x1, bg.coverage.y0 } }; // top-right
+            all_vertices[i * 4 + 2] = .{ .world_pos = .{ bg.coverage.x0, bg.coverage.y1 } }; // bottom-left
+            all_vertices[i * 4 + 3] = .{ .world_pos = .{ bg.coverage.x1, bg.coverage.y1 } }; // bottom-right
+        }
+
+        var buffer_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(@TypeOf(all_vertices)),
+            .Usage = D3D11_USAGE_IMMUTABLE,
+            .BindFlags = D3D11_BIND_VERTEX_BUFFER,
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var vertex_buffer: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
+        if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
+        errdefer _ = vertex_buffer.IUnknown.Release();
+
+        const stride: u32 = @sizeOf(TileVertex);
+        const vb_offset: u32 = 0;
+        context.IASetVertexBuffers(0, 1, &vertex_buffer, &stride, &vb_offset);
+        context.IASetIndexBuffer(index_buffer, .R16_UNIT, 0);
+
+        return .{
+            .cbuffer = cbuffer,
+            .context = context,
+        };
+    }
+
+    fn PerFrameUploadLayer(self: *Self, bg: TileBackground, camera: Camera) void {
+        var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
+        const hr = self.context.Map(
+            @ptrCast(self.cbuffer),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        const params: *TileParams = @ptrCast(@alignCast(mapped.pData));
+        params.* = TileParams{
+            .atlas_rect_uv = bg.atlas_rect_uv,
+            .tile_size_world = bg.tile_size_world,
+            .parallax_factor = bg.parallax_factor,
+            .camera_pos = .{
+                camera.position[0] * bg.parallax_factor[0],
+                camera.position[1] * bg.parallax_factor[1],
+            },
+        };
+        self.context.Unmap(@ptrCast(self.cbuffer), 0);
+        var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
+        self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
+    }
+
+    fn drawBackground(self: *Self, bg_index: u32) void {
+        self.context.DrawIndexed(6, 0, @intCast(bg_index * 4));
+    }
+};
+
+const MyWorldResources = struct {
+    const Self = @This();
+
+    backgrounds: []TileBackground,
+
+    pub fn init(atlas: MyTexture) Self {
+        const backgrounds = [_]TileBackground{makeBackground(
+            .{ .x = 0, .y = 0, .width = 32, .height = 32 },
+            atlas,
+            .{
+                .x = 0,
+                .y = 0,
+                .width = 100,
+                .height = 100,
+            },
+            .{ 10, 10 },
+            .{ 1, 1 },
+        )};
+
+        return .{ .backgrounds = backgrounds };
+    }
+
+    fn makeBackground(pixel_rect: Rect, atlas: MyTexture, coverage: Rect, tile_size: [2]f32, parallax: [2]f32) TileBackground {
+        const atlas_rect_uv = [4]f32{
+            pixel_rect.x / atlas.width,
+            pixel_rect.y / atlas.height,
+            (pixel_rect.x + pixel_rect.width) / atlas.width,
+            (pixel_rect.y + pixel_rect.height) / atlas.height,
+        };
+
+        return .{
+            .coverage = coverage,
+            .atlas_rect_uv = atlas_rect_uv,
+            .parallax_factor = parallax,
+            .tile_size_world = tile_size,
+        };
+    }
 };

@@ -5,7 +5,7 @@ const Camera = @import("camera.zig");
 
 const Input = @import("input.zig");
 
-const scn = @import("scene.zig");
+const Scene = @import("scene.zig");
 const ds = @import("draw_spr.zig");
 const SpriteBatch = ds.SpriteBatch;
 const DebugBatch = ds.DebugBatch;
@@ -172,7 +172,7 @@ pub const GamePlatform = struct {
 
 pub const GameManager = struct {
     platform: GamePlatform,
-    scene: scn.Scene,
+    scene: Scene,
     input: Input,
 
     const Self = @This();
@@ -203,7 +203,7 @@ pub const GameManager = struct {
         if (self.input.is_just_down(Input.Action.Quit)) {
             return true;
         }
-        scn.updateScene(&self.scene, dt);
+        self.scene.update(dt);
         return false;
     }
 
@@ -211,11 +211,11 @@ pub const GameManager = struct {
         self.platform.beginDraw(self.scene.camera);
 
         self.platform.beginSpriteDraw();
-        scn.renderScene(self.platform.spriteBatch(), &self.scene, alpha);
+        self.scene.render(self.platform.spriteBatch(), alpha);
         self.platform.endSpriteDraw();
 
         self.platform.beginDebugDraw();
-        scn.renderDebug(self.platform.debugBatch(), &self.scene);
+        self.scene.renderDebug(self.platform.debugBatch());
         self.platform.endDebugDraw();
 
         self.platform.drawPass2();
@@ -223,7 +223,7 @@ pub const GameManager = struct {
         self.platform.beginPass3(self.scene.camera);
 
         self.platform.beginFontDraw();
-        scn.renderHUD(self.platform.spriteBatch(), self.platform.fontBatch(), &self.scene);
+        self.scene.renderHUD(self.platform.spriteBatch(), self.platform.fontBatch());
         self.platform.endFontDraw();
 
         self.platform.drawPass3();

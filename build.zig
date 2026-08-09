@@ -78,6 +78,22 @@ pub fn build(b: *std.Build) void {
         shader_dir ++ "/font.hlsl",
     });
 
+    const compile_parallax_vs = b.addSystemCommand(&.{
+        "bin/fxc.exe",                  "/nologo",
+        "/T",                           "vs_5_0",
+        "/E",                           "VSMain",
+        "/Fo",                          shader_dir ++ "/parallax_vs.cso",
+        shader_dir ++ "/parallax.hlsl",
+    });
+
+    const compile_parallax_ps = b.addSystemCommand(&.{
+        "bin/fxc.exe",                  "/nologo",
+        "/T",                           "ps_5_0",
+        "/E",                           "PSMain",
+        "/Fo",                          shader_dir ++ "/parallax_ps.cso",
+        shader_dir ++ "/parallax.hlsl",
+    });
+
     //exe.subsystem = .Windows;
 
     exe.step.dependOn(&compile_vs.step);
@@ -88,6 +104,8 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&compile_debug_ps.step);
     exe.step.dependOn(&compile_font_vs.step);
     exe.step.dependOn(&compile_font_ps.step);
+    exe.step.dependOn(&compile_parallax_vs.step);
+    exe.step.dependOn(&compile_parallax_ps.step);
 
     // single file
     //b.installFile("data/opening.pgn", "bin/opening.pgn");
