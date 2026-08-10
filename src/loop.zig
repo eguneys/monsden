@@ -10,6 +10,7 @@ const ds = @import("draw_spr.zig");
 const SpriteBatch = ds.SpriteBatch;
 const DebugBatch = ds.DebugBatch;
 const FontBatch = ds.FontBatch;
+const ParallaxBatch = ds.ParallaxBatch;
 
 pub const KeyboardState = struct {
     current: [256]bool = [_]bool{false} ** 256,
@@ -55,6 +56,9 @@ pub const GamePlatform = struct {
         spriteBatch: *const fn (ctx: *anyopaque) SpriteBatch,
         debugBatch: *const fn (ctx: *anyopaque) DebugBatch,
         fontBatch: *const fn (ctx: *anyopaque) FontBatch,
+        parallaxBatch: *const fn (ctx: *anyopaque) ParallaxBatch,
+
+        beginParallaxDraw: *const fn (ctx: *anyopaque) void,
 
         beginFontDraw: *const fn (ctx: *anyopaque) void,
         endFontDraw: *const fn (ctx: *anyopaque) void,
@@ -96,6 +100,9 @@ pub const GamePlatform = struct {
     pub fn fontBatch(self: *Self) FontBatch {
         return self.vtable.fontBatch(self.ptr);
     }
+    pub fn parallaxBatch(self: *Self) ParallaxBatch {
+        return self.vtable.parallaxBatch(self.ptr);
+    }
 
     pub fn toggleFullscreen(self: *Self) void {
         self.vtable.toggleFullscreen(self.ptr);
@@ -117,6 +124,10 @@ pub const GamePlatform = struct {
     }
     pub fn drawPass3(self: *Self) void {
         self.vtable.drawPass3(self.ptr);
+    }
+
+    pub fn beginParallaxDraw(self: *Self) void {
+        self.vtable.beginParallaxDraw(self.ptr);
     }
 
     pub fn beginSpriteDraw(self: *Self) void {
@@ -209,6 +220,9 @@ pub const GameManager = struct {
 
     pub fn render(self: *Self, alpha: f32) void {
         self.platform.beginDraw(self.scene.camera);
+
+        self.platform.beginParallaxDraw();
+        self.scene.renderBackground(self.platform.parallaxBatch(), alpha);
 
         self.platform.beginSpriteDraw();
         self.scene.render(self.platform.spriteBatch(), alpha);

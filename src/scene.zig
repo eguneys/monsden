@@ -2,6 +2,7 @@ const ds = @import("draw_spr.zig");
 const SpriteBatch = ds.SpriteBatch;
 const DebugBatch = ds.DebugBatch;
 const FontBatch = ds.FontBatch;
+const ParallaxBatch = ds.ParallaxBatch;
 
 const math = @import("math.zig");
 const anim = @import("anim.zig");
@@ -21,11 +22,17 @@ pub fn init() Self {
     return .{ .camera = .init(0, 0), .animation = .init(7.2, frames, source_rect, dest_rect) };
 }
 
+pub fn renderBackground(self: *Self, batch: ParallaxBatch, alpha: f32) void {
+    _ = alpha;
+
+    batch.draw_bg(0, self.camera);
+}
+
 pub fn render(self: *Self, batch: SpriteBatch, alpha: f32) void {
     _ = alpha;
+    _ = batch;
     _ = self;
 
-    batch.draw_bg(0, 0, 64, 64, 0, 0, 1, 1);
     //batch.draw_spr(0, 0, 32, 32, 0, 0, 2, 2);
     //scene.animation.dest.x = 0;
     //scene.animation.dest.y = 0;
@@ -47,7 +54,7 @@ pub fn render(self: *Self, batch: SpriteBatch, alpha: f32) void {
 pub fn update(self: *Self, dt: f64) void {
     self.t += @floatCast(dt);
     anim.updateFramesAnimation(&self.animation, dt);
-    //scene.camera.position[0] = @sin(scene.t) * 200;
+    self.camera.position[0] = @sin(self.t) * 200;
     //scene.camera.zoom = @sin(scene.t) * 0.5;
 }
 

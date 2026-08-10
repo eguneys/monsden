@@ -148,8 +148,11 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         _ = ShowWindow(hwndV, SW_SHOW);
 
         var context: MyDirectXContext = try .init(hwndV);
-        const resources: MyTextureResources = try .init(io, allocator, &context);
+        var resources: MyTextureResources = try .init(io, allocator, &context);
 
+        var world_Resources: MyWorldResources = .init(resources.texBackground);
+
+        var parallax: MyParallaxBackgroundRenderer = try .init(context.device, context.context, &world_Resources.backgrounds);
         var batch: MyBatchDraw = try .init(context.device, context.context);
         var debug: MyDebugDraw = try .init(context.device, context.context);
 
@@ -158,10 +161,12 @@ pub fn winMain(io: std.Io, allocator: Allocator) !void {
         var keyboard: KeyboardState = .init();
         const platform: MyPlatform = .init(
             &context,
+            &parallax,
             &batch,
             &debug,
             &font_batch,
-            resources,
+            &resources,
+            &world_Resources,
             &keyboard,
         );
 
@@ -317,6 +322,7 @@ const D3D11_VIEWPORT = win32.graphics.direct3d11.D3D11_VIEWPORT;
 
 const DXGI_FORMAT_R8G8B8A8_UNORM = win32.graphics.dxgi.common.DXGI_FORMAT_R8G8B8A8_UNORM;
 const DXGI_SWAP_EFFECT_DISCARD = win32.graphics.dxgi.DXGI_SWAP_EFFECT_DISCARD;
+const DXGI_SWAP_EFFECT_FLIP_DISCARD = win32.graphics.dxgi.DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
 const TRUE = win32.foundation.TRUE;
 
@@ -479,10 +485,10 @@ const MyDirectXContext = struct {
             },
             .SampleDesc = .{ .Count = 1, .Quality = 0 },
             .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            .BufferCount = 1,
+            .BufferCount = 2,
             .OutputWindow = hwnd,
             .Windowed = TRUE,
-            .SwapEffect = DXGI_SWAP_EFFECT_DISCARD,
+            .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .Flags = 0,
         };
 
@@ -1794,9 +1800,13 @@ const MyTexture = struct {
 
 pub const MyPlatform = struct {
     cx: *MyDirectXContext,
+
+    parallax: *MyParallaxBackgroundRenderer,
+
     batch: *MyBatchDraw,
     font_batch: *MyFontBatch,
-    resources: MyTextureResources,
+    resources: *MyTextureResources,
+    world_resources: *MyWorldResources,
 
     debug: *MyDebugDraw,
 
@@ -1805,18 +1815,22 @@ pub const MyPlatform = struct {
     const Self = @This();
     pub fn deinit(self: *Self) void {
         self.cx.deinit();
-        self.resources.deinit();
         self.debug.deinit();
         self.batch.deinit();
         self.font_batch.deinit();
+        self.parallax.deinit();
+        self.resources.deinit();
+        self.world_resources.deinit();
     }
 
-    fn init(cx: *MyDirectXContext, batch: *MyBatchDraw, debug: *MyDebugDraw, font_batch: *MyFontBatch, resources: MyTextureResources, keyboard: *KeyboardState) Self {
+    fn init(cx: *MyDirectXContext, parallax: *MyParallaxBackgroundRenderer, batch: *MyBatchDraw, debug: *MyDebugDraw, font_batch: *MyFontBatch, resources: *MyTextureResources, world_resources: *MyWorldResources, keyboard: *KeyboardState) Self {
         return .{
             .cx = cx,
+            .parallax = parallax,
             .batch = batch,
             .font_batch = font_batch,
             .resources = resources,
+            .world_resources = world_resources,
             .debug = debug,
             .keyboard = keyboard,
         };
@@ -1997,6 +2011,9 @@ const MyFontAtlasRasterizer = struct {
     }
 
     fn uploadGlyph(self: *Self, rect: Rect, buf: []const u8) void {
+        if (rect.width == 0 and rect.height == 0) {
+            return;
+        }
         const box = D3D11_BOX{
             .left = @intFromFloat(rect.x),
             .top = @intFromFloat(rect.y),
@@ -2029,7 +2046,7 @@ pub const GlyphEntry = struct {
 };
 
 const TileVertex = extern struct {
-    pos: [2]f32,
+    world_pos: [2]f32,
 };
 
 const TileParams = extern struct {
@@ -2037,7 +2054,7 @@ const TileParams = extern struct {
     tile_size_world: [2]f32,
     parallax_factor: [2]f32,
     camera_pos: [2]f32,
-    _pad: [2]f32,
+    _pad: [2]f32 = .{ 0, 0 },
 };
 
 const TileBackground = struct {
@@ -2047,15 +2064,35 @@ const TileBackground = struct {
     parallax_factor: [2]f32,
 };
 
-const ParallaxBackgroundRenderer = struct {
-    cbuffer: ID3D11Buffer,
+const MyParallaxBackgroundRenderer = struct {
+    cbuffer: *ID3D11Buffer,
+    cbuffer2: *ID3D11Buffer,
+
+    vertex_buffer: *ID3D11Buffer,
+    index_buffer: *ID3D11Buffer,
+
+    vertex_shader: *ID3D11VertexShader,
+    pixel_shader: *ID3D11PixelShader,
+
+    input_layout: *ID3D11InputLayout,
 
     context: *ID3D11DeviceContext,
 
     const MaxBackgrounds: usize = 8;
 
+    pub fn deinit(self: *Self) void {
+        _ = self.cbuffer.IUnknown.Release();
+        _ = self.cbuffer2.IUnknown.Release();
+        _ = self.vertex_shader.IUnknown.Release();
+        _ = self.pixel_shader.IUnknown.Release();
+        _ = self.input_layout.IUnknown.Release();
+
+        _ = self.vertex_buffer.IUnknown.Release();
+        _ = self.index_buffer.IUnknown.Release();
+    }
+
     const Self = @This();
-    pub fn init(device: *ID3D11Device, context: *ID3D11DeviceContext, backgrounds: []TileBackground) Self {
+    pub fn init(device: *ID3D11Device, context: *ID3D11DeviceContext, backgrounds: []TileBackground) !Self {
         const cbuffer_desc = D3D11_BUFFER_DESC{
             .ByteWidth = @sizeOf(TileParams),
             .Usage = .DYNAMIC,
@@ -2069,6 +2106,20 @@ const ParallaxBackgroundRenderer = struct {
         var hr = device.CreateBuffer(&cbuffer_desc, null, @ptrCast(&cbuffer));
         if (hr != HRESULT.S_OK) return error.CreateCBufferFailed;
         errdefer _ = cbuffer.IUnknown.Release();
+
+        const cbuffer2_desc = D3D11_BUFFER_DESC{
+            .ByteWidth = @sizeOf(CameraConstants),
+            .Usage = .DYNAMIC,
+            .BindFlags = .{ .CONSTANT_BUFFER = 1 },
+            .CPUAccessFlags = .{ .WRITE = 1 },
+            .MiscFlags = .{},
+            .StructureByteStride = 0,
+        };
+
+        var cbuffer2: *ID3D11Buffer = undefined;
+        hr = device.CreateBuffer(&cbuffer2_desc, null, @ptrCast(&cbuffer2));
+        if (hr != HRESULT.S_OK) return error.CreateCBufferFailed;
+        errdefer _ = cbuffer2.IUnknown.Release();
 
         // Shader additions
         var vertex_shader: *ID3D11VertexShader = undefined;
@@ -2097,8 +2148,8 @@ const ParallaxBackgroundRenderer = struct {
         hr = device.CreateInputLayout(
             &input_element_descs,
             input_element_descs.len,
-            vs_bytecode,
-            vs_bytecode.len,
+            parallax_vs_bytecode,
+            parallax_vs_bytecode.len,
             @ptrCast(&input_layout),
         );
         if (hr != HRESULT.S_OK) return error.CreateInputLayoutFailed;
@@ -2133,40 +2184,49 @@ const ParallaxBackgroundRenderer = struct {
         var all_vertices: [MaxBackgrounds * 4]TileVertex = undefined;
 
         for (backgrounds, 0..) |bg, i| {
-            all_vertices[i * 4 + 0] = .{ .world_pos = .{ bg.coverage.x0, bg.coverage.y0 } }; // top-left
-            all_vertices[i * 4 + 1] = .{ .world_pos = .{ bg.coverage.x1, bg.coverage.y0 } }; // top-right
-            all_vertices[i * 4 + 2] = .{ .world_pos = .{ bg.coverage.x0, bg.coverage.y1 } }; // bottom-left
-            all_vertices[i * 4 + 3] = .{ .world_pos = .{ bg.coverage.x1, bg.coverage.y1 } }; // bottom-right
+            all_vertices[i * 4 + 0] = .{ .world_pos = .{ bg.coverage.x, bg.coverage.y } }; // top-left
+            all_vertices[i * 4 + 1] = .{ .world_pos = .{ bg.coverage.x + bg.coverage.width, bg.coverage.y } }; // top-right
+            all_vertices[i * 4 + 2] = .{ .world_pos = .{ bg.coverage.x + bg.coverage.width, bg.coverage.y + bg.coverage.height } }; // bottom-right
+            all_vertices[i * 4 + 3] = .{ .world_pos = .{ bg.coverage.x, bg.coverage.y + bg.coverage.height } }; // bottom-left
         }
 
         var buffer_desc = D3D11_BUFFER_DESC{
             .ByteWidth = @sizeOf(@TypeOf(all_vertices)),
             .Usage = D3D11_USAGE_IMMUTABLE,
             .BindFlags = D3D11_BIND_VERTEX_BUFFER,
-            .CPUAccessFlags = .{ .WRITE = 1 },
+            .CPUAccessFlags = .{},
             .MiscFlags = .{},
             .StructureByteStride = 0,
         };
+        var vb_init = D3D11_SUBRESOURCE_DATA{
+            .pSysMem = &all_vertices,
+            .SysMemPitch = 0,
+            .SysMemSlicePitch = 0,
+        };
 
         var vertex_buffer: *ID3D11Buffer = undefined;
-        hr = device.CreateBuffer(&buffer_desc, null, @ptrCast(&vertex_buffer));
+        hr = device.CreateBuffer(&buffer_desc, &vb_init, @ptrCast(&vertex_buffer));
         if (hr != HRESULT.S_OK) return error.CreateVertexBufferFailed;
         errdefer _ = vertex_buffer.IUnknown.Release();
 
-        const stride: u32 = @sizeOf(TileVertex);
-        const vb_offset: u32 = 0;
-        context.IASetVertexBuffers(0, 1, &vertex_buffer, &stride, &vb_offset);
-        context.IASetIndexBuffer(index_buffer, .R16_UNIT, 0);
-
         return .{
+            .vertex_shader = vertex_shader,
+            .pixel_shader = pixel_shader,
+            .input_layout = input_layout,
+
+            .cbuffer2 = cbuffer2,
             .cbuffer = cbuffer,
+
+            .vertex_buffer = vertex_buffer,
+            .index_buffer = index_buffer,
+
             .context = context,
         };
     }
 
-    fn PerFrameUploadLayer(self: *Self, bg: TileBackground, camera: Camera) void {
+    fn PerFrameUploadLayer(self: *Self, bg: TileBackground, camera: Camera) !void {
         var mapped: D3D11_MAPPED_SUBRESOURCE = undefined;
-        const hr = self.context.Map(
+        var hr = self.context.Map(
             @ptrCast(self.cbuffer),
             0,
             D3D11_MAP_WRITE_DISCARD,
@@ -2176,7 +2236,7 @@ const ParallaxBackgroundRenderer = struct {
         if (hr != HRESULT.S_OK) return error.MapFailed;
         const params: *TileParams = @ptrCast(@alignCast(mapped.pData));
         params.* = TileParams{
-            .atlas_rect_uv = bg.atlas_rect_uv,
+            .atlas_rect = bg.atlas_rect_uv,
             .tile_size_world = bg.tile_size_world,
             .parallax_factor = bg.parallax_factor,
             .camera_pos = .{
@@ -2185,11 +2245,50 @@ const ParallaxBackgroundRenderer = struct {
             },
         };
         self.context.Unmap(@ptrCast(self.cbuffer), 0);
-        var pp_cbuffer = [_]?*ID3D11Buffer{self.cbuffer};
-        self.context.VSSetConstantBuffers(0, 1, @ptrCast(&pp_cbuffer));
+
+        hr = self.context.Map(
+            @ptrCast(self.cbuffer2),
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mapped,
+        );
+        if (hr != HRESULT.S_OK) return error.MapFailed;
+        const dest: *CameraConstants = @ptrCast(@alignCast(mapped.pData));
+        dest.* = CameraConstants{ .view_projection = camera.viewProjectionMatrix(game_width, game_height) };
+        self.context.Unmap(@ptrCast(self.cbuffer2), 0);
+
+        var pp_cbuffer = [_]?*ID3D11Buffer{
+            self.cbuffer2,
+            self.cbuffer,
+        };
+        self.context.VSSetConstantBuffers(0, 2, @ptrCast(&pp_cbuffer));
+        self.context.PSSetConstantBuffers(0, 2, @ptrCast(&pp_cbuffer));
     }
 
-    fn drawBackground(self: *Self, bg_index: u32) void {
+    pub fn beginBatch(self: *Self) void {
+        const stride: u32 = @sizeOf(TileVertex);
+        const vb_offset: u32 = 0;
+
+        const strides = &[_]u32{stride};
+        const vb_offsets = &[_]u32{vb_offset};
+        self.context.IASetVertexBuffers(0, 1, @ptrCast(&self.vertex_buffer), strides, vb_offsets);
+        self.context.IASetIndexBuffer(self.index_buffer, DXGI_FORMAT_R16_UINT, 0);
+
+        self.context.IASetInputLayout(self.input_layout);
+        self.context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        self.context.VSSetShader(self.vertex_shader, null, 0);
+        self.context.PSSetShader(self.pixel_shader, null, 0);
+    }
+
+    pub fn SetShaderResourceForTexture(self: *Self, texture: *MyTexture) void {
+        var raw_srv = [_]?*ID3D11ShaderResourceView{texture.Srv};
+        self.context.PSSetShaderResources(0, 1, @ptrCast(&raw_srv));
+    }
+
+    pub fn drawBackground(self: *Self, bg_index: u32, bg: TileBackground, camera: Camera) !void {
+        try self.PerFrameUploadLayer(bg, camera);
         self.context.DrawIndexed(6, 0, @intCast(bg_index * 4));
     }
 };
@@ -2197,31 +2296,36 @@ const ParallaxBackgroundRenderer = struct {
 const MyWorldResources = struct {
     const Self = @This();
 
-    backgrounds: []TileBackground,
+    backgrounds: [MyParallaxBackgroundRenderer.MaxBackgrounds]TileBackground,
+
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
 
     pub fn init(atlas: MyTexture) Self {
-        const backgrounds = [_]TileBackground{makeBackground(
+        var backgrounds: [MyParallaxBackgroundRenderer.MaxBackgrounds]TileBackground = undefined;
+        backgrounds[0] = makeBackground(
             .{ .x = 0, .y = 0, .width = 32, .height = 32 },
             atlas,
             .{
                 .x = 0,
                 .y = 0,
-                .width = 100,
-                .height = 100,
+                .width = 1000,
+                .height = 1000,
             },
-            .{ 10, 10 },
-            .{ 1, 1 },
-        )};
+            .{ 320, 320 },
+            .{ 0.5, 0.5 },
+        );
 
         return .{ .backgrounds = backgrounds };
     }
 
     fn makeBackground(pixel_rect: Rect, atlas: MyTexture, coverage: Rect, tile_size: [2]f32, parallax: [2]f32) TileBackground {
         const atlas_rect_uv = [4]f32{
-            pixel_rect.x / atlas.width,
-            pixel_rect.y / atlas.height,
-            (pixel_rect.x + pixel_rect.width) / atlas.width,
-            (pixel_rect.y + pixel_rect.height) / atlas.height,
+            pixel_rect.x / @as(f32, @floatFromInt(atlas.Width)),
+            pixel_rect.y / @as(f32, @floatFromInt(atlas.Height)),
+            (pixel_rect.x + pixel_rect.width) / @as(f32, @floatFromInt(atlas.Width)),
+            (pixel_rect.y + pixel_rect.height) / @as(f32, @floatFromInt(atlas.Height)),
         };
 
         return .{

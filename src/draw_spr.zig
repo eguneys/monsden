@@ -1,5 +1,6 @@
 const math = @import("math.zig");
 const Rect = math.Rect;
+const Camera = @import("camera.zig");
 
 pub const SpriteBatch = struct {
     ptr: *anyopaque,
@@ -7,7 +8,7 @@ pub const SpriteBatch = struct {
 
     pub const VTable = struct {
         drawSprite: *const fn (ctx: *anyopaque, source_rect: Rect, dest_rect: Rect) void,
-        drawBg: *const fn (ctx: *anyopaque, source_rect: Rect, dest_rect: Rect) void,
+        drawBg: *const fn (ctx: *anyopaque, bg_index: u32, camera: Camera) void,
     };
 
     const Self = @This();
@@ -16,10 +17,8 @@ pub const SpriteBatch = struct {
         const dest_rect: Rect = .{ .x = dx, .y = dy, .width = sw * scale_x, .height = sh * scale_y };
         self.vtable.drawSprite(self.ptr, source_rect, dest_rect);
     }
-    pub fn draw_bg(self: Self, sx: f32, sy: f32, sw: f32, sh: f32, dx: f32, dy: f32, scale_x: f32, scale_y: f32) void {
-        const source_rect: Rect = .{ .x = sx, .y = sy, .width = sw, .height = sh };
-        const dest_rect: Rect = .{ .x = dx, .y = dy, .width = sw * scale_x, .height = sh * scale_y };
-        self.vtable.drawBg(self.ptr, source_rect, dest_rect);
+    pub fn draw_bg(self: Self, bg_index: u32, camera: Camera) void {
+        self.vtable.drawBg(self.ptr, bg_index, camera);
     }
 };
 
@@ -56,5 +55,19 @@ pub const FontBatch = struct {
     const Self = @This();
     pub fn draw_text(self: Self, x: f32, y: f32, text: []const u8) void {
         self.vtable.drawText(self.ptr, x, y, text);
+    }
+};
+
+pub const ParallaxBatch = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        drawBg: *const fn (ctx: *anyopaque, bg_index: u32, camera: Camera) void,
+    };
+
+    const Self = @This();
+    pub fn draw_bg(self: Self, bg_index: u32, camera: Camera) void {
+        self.vtable.drawBg(self.ptr, bg_index, camera);
     }
 };

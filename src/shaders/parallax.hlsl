@@ -35,6 +35,7 @@ float4 PSMain(VS_OUTPUT input) : SV_TARGET
     float2 local_uv = frac(tile_space);
     float2 atlas_uv = lerp(atlas_rect.xy, atlas_rect.zw, local_uv);
     float4 color = tex.Sample(samp, atlas_uv);
+    //color = float4(atlas_uv, 1.0, 1.0);
 
     return color;
 }

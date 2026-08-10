@@ -7,6 +7,8 @@ const ds = @import("draw_spr.zig");
 const FontBatch = ds.FontBatch;
 const DebugBatch = ds.DebugBatch;
 const SpriteBatch = ds.SpriteBatch;
+const ParallaxBatch = ds.ParallaxBatch;
+
 const GamePlatform = @import("loop.zig").GamePlatform;
 const KeyboardState = @import("loop.zig").KeyboardState;
 
@@ -56,10 +58,11 @@ pub const MySpriteBatch = struct {
 
         self.platform.batch.drawSprite(&self.platform.resources.texSprites, source_rect, dest_rect) catch unreachable;
     }
-    fn drawBgImpl(ctx: *anyopaque, source_rect: Rect, dest_rect: Rect) void {
+    fn drawBgImpl(ctx: *anyopaque, bg_index: u32, camera: Camera) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        self.platform.batch.drawSprite(&self.platform.resources.texBackground, source_rect, dest_rect) catch unreachable;
+        //self.platform.batch.drawSprite(&self.platform.resources.texBackground, source_rect, dest_rect) catch unreachable;
+        self.platform.parallax.drawBackground(bg_index, self.platform.world_resources.backgrounds[bg_index], camera) catch unreachable;
     }
 
     const vtable = SpriteBatch.VTable{
@@ -100,12 +103,37 @@ pub const MyFontBatch = struct {
     }
 };
 
+pub const MyParallaxBatch = struct {
+    const Self = @This();
+
+    platform: MyPlatform,
+
+    fn drawBgImpl(ctx: *anyopaque, bg_index: u32, camera: Camera) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        self.platform.parallax.SetShaderResourceForTexture(&self.platform.resources.texBackground);
+        self.platform.parallax.drawBackground(bg_index, self.platform.world_resources.backgrounds[bg_index], camera) catch unreachable;
+    }
+
+    const vtable = ParallaxBatch.VTable{
+        .drawBg = drawBgImpl,
+    };
+
+    pub fn parallaxBatch(self: *Self) ParallaxBatch {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
+        };
+    }
+};
+
 pub const MyGamePlatform = struct {
     platform: MyPlatform,
 
     batch: MySpriteBatch,
     debug: MyDebugBatch,
     font: MyFontBatch,
+    parallax: MyParallaxBatch,
 
     pub fn deinit(self: *Self) void {
         self.platform.deinit();
@@ -118,6 +146,7 @@ pub const MyGamePlatform = struct {
             .batch = .{ .platform = platform },
             .debug = .{ .platform = platform },
             .font = .{ .platform = platform },
+            .parallax = .{ .platform = platform },
         };
     }
 
@@ -179,6 +208,16 @@ pub const MyGamePlatform = struct {
     fn fontBatchImpl(ctx: *anyopaque) FontBatch {
         const self: *Self = @ptrCast(@alignCast(ctx));
         return self.font.fontBatch();
+    }
+    fn parallaxBatchImpl(ctx: *anyopaque) ParallaxBatch {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.parallax.parallaxBatch();
+    }
+
+    fn beginParallaxDrawImpl(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        self.platform.parallax.beginBatch();
     }
 
     fn beginFontDrawImpl(ctx: *anyopaque) void {
@@ -255,6 +294,9 @@ pub const MyGamePlatform = struct {
         .spriteBatch = spriteBatchImpl,
         .debugBatch = debugBatchImpl,
         .fontBatch = fontBatchImpl,
+        .parallaxBatch = parallaxBatchImpl,
+
+        .beginParallaxDraw = beginParallaxDrawImpl,
 
         .beginFontDraw = beginFontDrawImpl,
         .endFontDraw = endFontDrawImpl,
